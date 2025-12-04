@@ -35,7 +35,7 @@ import {
 } from "@mui/icons-material";
 import CashierDrawer from "./CashierDrawer.tsx";
 import toast, {Toaster} from "react-hot-toast";
-import {TransactionItem} from "../../api/types.ts";
+import {type CartItem, TransactionItem, type TransactionRequest} from "../../api/types.ts";
 import {transactionService} from "../../api/service/transactionService.ts";
 
 export default function DashboardPage() {
@@ -94,28 +94,37 @@ export default function DashboardPage() {
     };
 
     const saveTransaction = (txDataRaw: any) => {
-        const mainItem = txDataRaw.items[0];
+        // Convert CartItem -> TransactionItemRequest
+        const itemsPayload = txDataRaw.items.map((item: CartItem) => ({
+            treatmentType: item.treatmentType,
+            treatmentId: item.treatmentType === "Single" ? item.id : null,
+            treatmentPackageId: item.treatmentType === "Package" ? item.id : null,
+            price: item.price
+        }));
 
-        const payload = {
+        const payload: TransactionRequest = {
             employeeId: txDataRaw.employee.id,
-            treatmentId: mainItem.type === "TREATMENT" ? mainItem.id : null,
-            treatmentPackageId: mainItem.type === "PACKAGE" ? mainItem.id : null,
             customer: {
-                id: txDataRaw.customer.id,
-                name: txDataRaw.customer.name || "",
-                phoneNumber: txDataRaw.customer.phoneNumber || "",
+                id: txDataRaw.customer?.id,
+                name: txDataRaw.customer?.name || "",
+                phoneNumber: txDataRaw.customer?.phoneNumber || "",
             },
+            items: itemsPayload,
             actualPrice: txDataRaw.amount,
-            paymentMethod: "CASH",
+            paymentMethod: "CASH", // Todo: bikin pilihan di UI
             notes: "",
-            date: new Date().toISOString().slice(0, 10)
+            date: txDataRaw.time,
         };
 
         const isUpdate = transactions.some(t => t.id === txDataRaw.id);
 
-        const promise = (isUpdate ? transactionService.update(txDataRaw.id, payload) : transactionService.create(payload)).then(res => {
+        const promise = (
+            isUpdate
+                ? transactionService.update(txDataRaw.id, payload)
+                : transactionService.create(payload)
+        ).then(res => {
             if (!res.success || !res.data) {
-                throw new Error(res.message || "Unable to save new transaction!");
+                throw new Error(res.message || "Unable to save transaction!");
             }
 
             const newTransaction = new TransactionItem(res.data);
@@ -153,10 +162,8 @@ export default function DashboardPage() {
                 const resTransaction = await transactionService.getAll();
 
                 if (resTransaction?.success && Array.isArray(resTransaction.data)) {
-                    setTransactions(resTransaction.data.map((record) => new TransactionItem(record)));
-                } else {
-                    setTransactions([]);
-                }
+                    setTransactions(resTransaction.data.map(record => new TransactionItem(record)));
+                } else setTransactions([]);
             } catch (error) {
                 console.error("Failed to fetch data: ", error);
                 setTransactions([]);
@@ -167,6 +174,7 @@ export default function DashboardPage() {
 
         fetchData();
     }, []);
+
 
     const summaryData = [
         {

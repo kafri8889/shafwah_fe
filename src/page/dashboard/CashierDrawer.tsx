@@ -143,7 +143,7 @@ export default function CashierDrawer({ open, onClose, initialData, onSubmit }: 
             id: item.id,
             name: item.title,
             price: item.prices[0],
-            type: 'TREATMENT'
+            treatmentType: 'Single'
         };
         setCart([...cart, newItem]);
     };
@@ -155,7 +155,7 @@ export default function CashierDrawer({ open, onClose, initialData, onSubmit }: 
             id: pkg.id,
             name: pkg.title,
             price: pkg.price,
-            type: 'PACKAGE',
+            treatmentType: 'Package',
             details: treatmentNames
         };
         setCart([...cart, newItem]);
@@ -179,7 +179,7 @@ export default function CashierDrawer({ open, onClose, initialData, onSubmit }: 
             id: initialData ? initialData.id : Date.now(),
             time: initialData ? initialData.time : formatDateTime(new Date()),
             customer: customer,
-            service: cart.map(item => item.type === 'PACKAGE' ? `[PAKET] ${item.name}` : item.name).join(", "),
+            service: cart.map(item => item.treatmentType === 'Package' ? `[PAKET] ${item.name}` : item.name).join(", "),
             amount: totalPrice,
             status: "LUNAS",
             items: cart,
@@ -414,10 +414,10 @@ export default function CashierDrawer({ open, onClose, initialData, onSubmit }: 
                                         sx={{ py: 1, borderBottom: '1px solid #f0f0f0' }}
                                     >
                                         <Box sx={{ flexGrow: 1, width: '60%' }}>
-                                            <Typography variant="body2" fontWeight={item.type === 'PACKAGE' ? 'bold' : 'normal'} display="block">
+                                            <Typography variant="body2" fontWeight={item.treatmentType === 'Package' ? 'bold' : 'normal'} display="block">
                                                 {item.name}
                                             </Typography>
-                                            {item.type === 'PACKAGE' && item.details && (
+                                            {item.treatmentType === 'Package' && item.details && (
                                                 <Typography variant="caption" display="block" color="text.secondary" sx={{ fontSize: '0.75rem', mt: 0.5 }}>
                                                     + {item.details}
                                                 </Typography>

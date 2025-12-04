@@ -1,5 +1,8 @@
 import {formatDateTime} from "../util/date";
 
+export type TreatmentType = 'Single' | 'Package';
+export type PaymentMethod = 'CASH' | 'TRANSFER' | 'QRIS';
+
 export interface ApiResponse<T> {
     success: boolean;
     message: string;
@@ -51,18 +54,6 @@ export interface Employee {
     phoneNumber: string;
 }
 
-export interface CustomerTreatmentRecord {
-    id: number;
-    customer: Customer;
-    employee: Employee;
-    treatment: Treatment | null; // Null karena bisa jadi beli paket
-    treatmentPackage: TreatmentPackage | null; // Null karena bisa jadi beli satuan
-    actualPrice: number;
-    paymentMethod: string;
-    notes: string;
-    date: string;
-}
-
 export interface EmployeeResponse {
     id: number;
     name: string;
@@ -70,11 +61,6 @@ export interface EmployeeResponse {
     role: string;
     accessRole: string;
     phoneNumber: string;
-}
-
-export interface LoginResponse {
-    token: string;
-    user: Employee;
 }
 
 export interface LoginRequest {
@@ -108,23 +94,31 @@ export interface TreatmentPackageRequest {
     treatmentIds: number[];
 }
 
-export interface CustomerTreatmentRecordRequest {
-    customerId: number;
-    employeeId: number;
-    treatmentId: number | null;
-    treatmentPackageId: number | null;
-    actualPrice: number;
-    paymentMethod: string;
-    notes: string;
-    date: string;
-}
-
 export interface CartItem {
     id: number;
     name: string;
     price: number;
-    type: 'TREATMENT' | 'PACKAGE';
+    treatmentType: TreatmentType;
     details?: string;
+}
+
+export interface CustomerTransactionItem {
+    id: number;
+    treatment: Treatment | null;
+    treatmentPackage: TreatmentPackage | null;
+    treatmentType: TreatmentType;
+    price: number;
+}
+
+export interface CustomerTransaction {
+    id: number;
+    customer: Customer;
+    employee: Employee;
+    actualPrice: number;
+    paymentMethod: PaymentMethod;
+    notes: string;
+    date: string;
+    items: CustomerTransactionItem[];
 }
 
 export class TransactionItem {
@@ -135,10 +129,10 @@ export class TransactionItem {
     service: string;
     amount: number;
     status: string;
-    originalRecord: CustomerTreatmentRecord | null;
+    originalRecord: CustomerTransaction | null;
     items: CartItem[];
 
-    constructor(record?: CustomerTreatmentRecord | any) {
+    constructor(record?: CustomerTransaction | any) {
         this.items = [];
 
         if (!record) {
@@ -161,9 +155,11 @@ export class TransactionItem {
                 password: ""
             } as Employee;
 
-        } else if (record.customer && typeof record.customer === 'object') {
-            // Backend
-            const raw = record as CustomerTreatmentRecord;
+            return;
+        }
+
+        if (record.customer && typeof record.customer === "object" && Array.isArray(record.items)) {
+            const raw = record as CustomerTransaction;
 
             this.id = raw.id;
             this.employee = raw.employee;
@@ -171,41 +167,84 @@ export class TransactionItem {
             this.customer = raw.customer;
             this.status = "LUNAS";
             this.originalRecord = raw;
-            this.amount = raw.actualPrice;
+            this.amount = 0;
 
-            if (raw.treatment) {
-                this.service = raw.treatment.title;
-                this.items.push({
-                    id: raw.treatment.id,
-                    name: raw.treatment.title,
-                    price: raw.actualPrice,
-                    type: 'TREATMENT'
-                });
-            } else if (raw.treatmentPackage) {
-                this.service = `[PAKET] ${raw.treatmentPackage.title}`;
-                const detailNames = raw.treatmentPackage.treatments.map(t => t.title).join(", ");
-                this.items.push({
-                    id: raw.treatmentPackage.id,
-                    name: raw.treatmentPackage.title,
-                    price: raw.actualPrice,
-                    type: 'PACKAGE',
-                    details: detailNames
-                });
-            } else {
-                this.service = "Layanan dihapus";
-            }
+            this.items = [];
+            const serviceNames: string[] = [];
 
-        } else {
-            // Manual form
-            this.id = record.id;
-            this.employee = record.employee;
-            this.time = record.time;
-            this.customer = record.customer;
-            this.service = record.service;
-            this.amount = record.amount;
-            this.status = record.status;
-            this.items = record.items || [];
-            this.originalRecord = null;
+            raw.items.forEach((item: CustomerTransactionItem) => {
+                this.amount += item.price;
+
+                if (item.treatment && item.treatmentType === "Single") {
+                    this.items.push({
+                        id: item.treatment.id,
+                        name: item.treatment.title,
+                        price: item.price,
+                        treatmentType: "Single"
+                    });
+
+                    serviceNames.push(item.treatment.title);
+                } else if (item.treatmentPackage && item.treatmentType === "Package") {
+                    const detailNames = item.treatmentPackage.treatments
+                        .map(t => t.title)
+                        .join(", ");
+
+                    this.items.push({
+                        id: item.treatmentPackage.id,
+                        name: item.treatmentPackage.title,
+                        price: item.price,
+                        treatmentType: "Package",
+                        details: detailNames
+                    });
+
+                    serviceNames.push(`[PAKET] ${item.treatmentPackage.title}`);
+                } else {
+                    // fallback kalau entah kenapa datanya nggak ada treatment/treatmentPackage
+                    this.items.push({
+                        id: item.id,
+                        name: "Layanan tidak diketahui",
+                        price: item.price,
+                        treatmentType: "Single"
+                    });
+
+                    serviceNames.push("Unknown treatment/package");
+                }
+            });
+
+            this.service = serviceNames.length > 0 ? serviceNames.join(", ") : "Treatment deleted";
+
+            return;
         }
+
+        this.id = record.id;
+        this.employee = record.employee;
+        this.time = record.time;
+        this.customer = record.customer;
+        this.service = record.service;
+        this.amount = record.amount;
+        this.status = record.status;
+        this.items = record.items || [];
+        this.originalRecord = null;
     }
+}
+
+export interface TransactionItemRequest {
+    treatmentType: TreatmentType;
+    treatmentId: number | null;
+    treatmentPackageId: number | null;
+    price: number;
+}
+
+export interface TransactionRequest {
+    employeeId: number;
+    customer: {
+        id?: number;
+        name: string;
+        phoneNumber?: string;
+    };
+    items: TransactionItemRequest[];
+    actualPrice: number;
+    paymentMethod: PaymentMethod;
+    notes: string;
+    date: string;
 }
