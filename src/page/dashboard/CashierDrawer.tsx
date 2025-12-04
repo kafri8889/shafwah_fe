@@ -1,32 +1,54 @@
-import { useState, useMemo, useEffect } from "react";
+import {useEffect, useMemo, useState} from "react";
 import {
     Box,
-    Typography,
-    Divider,
     Button,
+    CircularProgress,
     Drawer,
-    TextField,
+    IconButton,
+    InputAdornment,
     List,
     ListItem,
     ListItemText,
-    IconButton,
-    Stack,
     MenuItem,
     Paper,
-    Tabs,
+    Stack,
     Tab,
-    InputAdornment
+    Tabs,
+    TextField,
+    Typography
 } from "@mui/material";
 import {
     Close as CloseIcon,
     Delete as DeleteIcon,
-    ShoppingCart as CartIcon,
-    Spa as SpaIcon,
     Inventory as PackageIcon,
-    Search as SearchIcon
+    Search as SearchIcon,
+    ShoppingCart as CartIcon,
+    Spa as SpaIcon
 } from "@mui/icons-material";
-import { MOCK_TREATMENTS, MOCK_PACKAGES, MOCK_EMPLOYEES } from "../../data/dummy.ts";
-import { TransactionItem, type CartItem } from "../../api/types.ts";
+
+import {
+    type CartItem,
+    type Customer,
+    type Employee,
+    TransactionItem,
+    type Treatment,
+    type TreatmentPackage
+} from "../../api/types.ts";
+import {treatmentService} from "../../api/service/treatmentService.ts";
+import {treatmentPackageService} from "../../api/service/treatmentPackageService.ts";
+import {employeeService} from "../../api/service/employeeService.ts";
+import toast from "react-hot-toast";
+import {formatDateTime} from "../../util/date.ts";
+
+const emptyCustomer: Customer = {
+    id: null,
+    name: "",
+    phoneNumber: "",
+    address: "",
+    visitCount: 0,
+    totalVisitCount: 0,
+    lastVisitDate: ""
+};
 
 interface CashierDrawerProps {
     open: boolean;
@@ -35,30 +57,73 @@ interface CashierDrawerProps {
     onSubmit: (transactionData: {
         id: number;
         time: string;
-        customer: string;
         service: string;
         amount: number;
         status: string;
+        customer: Customer;
+        employee: Employee;
         items: CartItem[]
     }) => void;
 }
 
 export default function CashierDrawer({ open, onClose, initialData, onSubmit }: CashierDrawerProps) {
-    const [customerName, setCustomerName] = useState("");
-    const [employeeName, setEmployeeName] = useState("");
+    const [customer, setCustomer] = useState<Customer>(emptyCustomer);
+    const [customerPhoneNumber, setCustomerPhoneNumber] = useState("");
+    const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
     const [cart, setCart] = useState<CartItem[]>([]);
     const [tabValue, setTabValue] = useState(0);
     const [searchTerm, setSearchTerm] = useState("");
 
+
+    const [treatments, setTreatments] = useState<Treatment[]>([]);
+    const [packages, setPackages] = useState<TreatmentPackage[]>([]);
+    const [employees, setEmployees] = useState<Employee[]>([]);
+    const [loading, setLoading] = useState(false);
+
+    useEffect(() => {
+        const fetchData = async () => {
+            setLoading(true);
+            try {
+                const [resTreatments, resPackages, resEmployees] = await Promise.all([
+                    treatmentService.getAll(),
+                    treatmentPackageService.getAll(),
+                    employeeService.getAll()
+                ]);
+
+                console.log("Fetched data: ", resTreatments, resPackages, resEmployees);
+
+                if (resTreatments?.success && Array.isArray(resTreatments.data)) {
+                    setTreatments(resTreatments.data);
+                    console.log("Treatments data: ", resTreatments.data);
+                }
+
+                if (resPackages?.success && Array.isArray(resPackages.data)) {
+                    setPackages(resPackages.data);
+                    console.log("Packages data: ", resPackages.data);
+                }
+
+                if (resEmployees?.success && Array.isArray(resEmployees.data)) {
+                    setEmployees(resEmployees.data);
+                    console.log("Employees data: ", resEmployees.data);
+                }
+            } catch (error) {
+                console.error("Failed to fetch data: ", error);
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        fetchData();
+    }, []);
+
     useEffect(() => {
         if (open) {
-            // If initial data not null, berarti edit mode
             if (initialData) {
-                setCustomerName(initialData.customer);
+                setCustomer(initialData.customer);
                 setCart(initialData.items || []);
-            } else { // Kalo null, berarti buat baru
-                setCustomerName("");
-                setEmployeeName("");
+            } else {
+                setCustomer(emptyCustomer);
+                setSelectedEmployee(null);
                 setCart([]);
                 setTabValue(0);
                 setSearchTerm("");
@@ -67,13 +132,13 @@ export default function CashierDrawer({ open, onClose, initialData, onSubmit }: 
     }, [open, initialData]);
 
     const filteredTreatments = useMemo(() => {
-        if (!searchTerm) return MOCK_TREATMENTS;
-        return MOCK_TREATMENTS.filter(t =>
+        if (!searchTerm) return treatments;
+        return treatments.filter(t =>
             t.title.toLowerCase().includes(searchTerm.toLowerCase())
         );
-    }, [searchTerm]);
+    }, [searchTerm, treatments]);
 
-    const addTreatmentToCart = (item: typeof MOCK_TREATMENTS[0]) => {
+    const addTreatmentToCart = (item: Treatment) => {
         const newItem: CartItem = {
             id: item.id,
             name: item.title,
@@ -83,7 +148,7 @@ export default function CashierDrawer({ open, onClose, initialData, onSubmit }: 
         setCart([...cart, newItem]);
     };
 
-    const addPackageToCart = (pkg: typeof MOCK_PACKAGES[0]) => {
+    const addPackageToCart = (pkg: TreatmentPackage) => {
         const treatmentNames = pkg.treatments.map(t => t.title).join(", ");
 
         const newItem: CartItem = {
@@ -103,20 +168,28 @@ export default function CashierDrawer({ open, onClose, initialData, onSubmit }: 
     };
 
     const processTransaction = () => {
+        if (!selectedEmployee) {
+            toast.error("Pilih stylist dulu!");
+            return;
+        }
+
         const totalPrice = cart.reduce((sum, item) => sum + item.price, 0);
 
         const transactionData = {
             id: initialData ? initialData.id : Date.now(),
-            time: initialData ? initialData.time : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            customer: customerName,
+            time: initialData ? initialData.time : formatDateTime(new Date()),
+            customer: customer,
             service: cart.map(item => item.type === 'PACKAGE' ? `[PAKET] ${item.name}` : item.name).join(", "),
             amount: totalPrice,
             status: "LUNAS",
-            items: cart
+            items: cart,
+            employee: selectedEmployee
         };
+
         onSubmit(transactionData);
         onClose();
     };
+
 
     const totalPrice = cart.reduce((sum, item) => sum + item.price, 0);
 
@@ -155,24 +228,46 @@ export default function CashierDrawer({ open, onClose, initialData, onSubmit }: 
                         fullWidth
                         size="small"
                         variant="outlined"
-                        value={customerName}
-                        onChange={(e) => setCustomerName(e.target.value)}
-                        placeholder="Contoh: Bu Siti"
+                        value={customer.name || ""}
+                        placeholder="Contoh: Yang Ruikee 💖"
+                        onChange={(e) => {
+                            const csName = e.target.value;
+
+                            setCustomer({
+                                ...customer,
+                                name: csName
+                            });
+                        }}
+                    />
+                    <TextField
+                        label="No Telp Pelanggan"
+                        fullWidth
+                        size="small"
+                        variant="outlined"
+                        type="number"
+                        value={customerPhoneNumber}
+                        onChange={(e) => setCustomerPhoneNumber(e.target.value)}
+                        placeholder="Contoh: 085156988228"
                     />
                     <TextField
                         select
-                        label="Stylist / Pegawai"
-                        fullWidth
+                        label="Stylist"
+                        fullWidth={true}
                         size="small"
-                        value={employeeName}
-                        onChange={(e) => setEmployeeName(e.target.value)}
+                        value={selectedEmployee?.id ?? ""}
+                        onChange={(e) => {
+                            const empId = Number(e.target.value);
+                            const emp = employees.find((emp) => emp.id === empId) || null;
+                            setSelectedEmployee(emp);
+                        }}
                     >
-                        {MOCK_EMPLOYEES.map((emp) => (
-                            <MenuItem key={emp.id} value={emp.name}>
+                        {employees.map((emp) => (
+                            <MenuItem key={emp.id} value={emp.id}>
                                 {emp.name}
                             </MenuItem>
                         ))}
                     </TextField>
+
                 </Stack>
 
                 <Typography variant="subtitle2" fontWeight="bold" sx={{ mb: 1 }}>
@@ -221,63 +316,67 @@ export default function CashierDrawer({ open, onClose, initialData, onSubmit }: 
                     </Box>
 
                     <Box sx={{ flexGrow: 1, overflowY: 'auto' }}>
-                        {tabValue === 0 && (
-                            <List dense sx={{ py: 0 }}>
-                                {filteredTreatments.map((item) => (
-                                    <ListItem
-                                        key={`t-${item.id}`}
-                                        button
-                                        divider
-                                        onClick={() => addTreatmentToCart(item)}
-                                    >
-                                        <ListItemText
-                                            primary={item.title}
-                                            secondary={`Rp ${item.prices[0].toLocaleString('id-ID')}`}
-                                            primaryTypographyProps={{ variant: 'body2', fontWeight: 500 }}
-                                        />
-                                        <IconButton size="small" onClick={(e) => { e.stopPropagation(); addTreatmentToCart(item); }}>
-                                            <CloseIcon sx={{ transform: 'rotate(45deg)' }} fontSize="small" color="primary" />
-                                        </IconButton>
-                                    </ListItem>
-                                ))}
-                                {filteredTreatments.length === 0 && (
-                                    <Box sx={{ p: 4, textAlign: 'center' }}>
-                                        <Typography variant="caption" color="text.secondary">Layanan tidak ditemukan</Typography>
-                                    </Box>
+                        {loading ? (
+                            <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
+                                <CircularProgress />
+                            </Box>
+                        ) : (
+                            <>
+                                {tabValue === 0 && (
+                                    <List dense sx={{ py: 0 }}>
+                                        {filteredTreatments.map((item) => (
+                                            <ListItem
+                                                key={`t-${item.id}`}
+                                                onClick={() => addTreatmentToCart(item)}
+                                            >
+                                                <ListItemText
+                                                    primary={item.title}
+                                                    secondary={`Rp ${item.prices[0].toLocaleString('id-ID')}`}
+                                                    primaryTypographyProps={{ variant: 'body2', fontWeight: 500 }}
+                                                />
+                                                <IconButton size="small" onClick={(e) => { e.stopPropagation(); addTreatmentToCart(item); }}>
+                                                    <CloseIcon sx={{ transform: 'rotate(45deg)' }} fontSize="small" color="primary" />
+                                                </IconButton>
+                                            </ListItem>
+                                        ))}
+                                        {filteredTreatments.length === 0 && (
+                                            <Box sx={{ p: 4, textAlign: 'center' }}>
+                                                <Typography variant="caption" color="text.secondary">Layanan tidak ditemukan</Typography>
+                                            </Box>
+                                        )}
+                                    </List>
                                 )}
-                            </List>
-                        )}
 
-                        {tabValue === 1 && (
-                            <List dense sx={{ py: 0 }}>
-                                {MOCK_PACKAGES.map((pkg) => (
-                                    <ListItem
-                                        key={`p-${pkg.id}`}
-                                        button
-                                        divider
-                                        onClick={() => addPackageToCart(pkg)}
-                                        alignItems="flex-start"
-                                    >
-                                        <ListItemText
-                                            primary={pkg.title}
-                                            primaryTypographyProps={{ variant: 'body2', fontWeight: 'bold', color: 'primary.main' }}
-                                            secondary={
-                                                <>
-                                                    <Typography component="span" variant="caption" display="block" color="text.primary" fontWeight="bold">
-                                                        Rp {pkg.price.toLocaleString('id-ID')}
-                                                    </Typography>
-                                                    <Typography component="span" variant="caption" color="text.secondary">
-                                                        Isi: {pkg.treatments.map(t => t.title).join(", ")}
-                                                    </Typography>
-                                                </>
-                                            }
-                                        />
-                                        <IconButton size="small" onClick={(e) => { e.stopPropagation(); addPackageToCart(pkg); }} sx={{ mt: 1 }}>
-                                            <CloseIcon sx={{ transform: 'rotate(45deg)' }} fontSize="small" color="secondary" />
-                                        </IconButton>
-                                    </ListItem>
-                                ))}
-                            </List>
+                                {tabValue === 1 && (
+                                    <List dense sx={{ py: 0 }}>
+                                        {packages.map((pkg) => (
+                                            <ListItem
+                                                key={`p-${pkg.id}`}
+                                                onClick={() => addPackageToCart(pkg)}
+                                                alignItems="flex-start"
+                                            >
+                                                <ListItemText
+                                                    primary={pkg.title}
+                                                    primaryTypographyProps={{ variant: 'body2', fontWeight: 'bold', color: 'primary.main' }}
+                                                    secondary={
+                                                        <>
+                                                            <Typography component="span" variant="caption" display="block" color="text.primary" fontWeight="bold">
+                                                                Rp {pkg.price.toLocaleString('id-ID')}
+                                                            </Typography>
+                                                            <Typography component="span" variant="caption" color="text.secondary">
+                                                                Isi: {pkg.treatments.map(t => t.title).join(", ")}
+                                                            </Typography>
+                                                        </>
+                                                    }
+                                                />
+                                                <IconButton size="small" onClick={(e) => { e.stopPropagation(); addPackageToCart(pkg); }} sx={{ mt: 1 }}>
+                                                    <CloseIcon sx={{ transform: 'rotate(45deg)' }} fontSize="small" color="secondary" />
+                                                </IconButton>
+                                            </ListItem>
+                                        ))}
+                                    </List>
+                                )}
+                            </>
                         )}
                     </Box>
                 </Paper>
@@ -358,7 +457,7 @@ export default function CashierDrawer({ open, onClose, initialData, onSubmit }: 
                     variant="contained"
                     fullWidth
                     size="large"
-                    disabled={cart.length === 0 || !customerName}
+                    disabled={cart.length === 0 || !customer.name || !selectedEmployee}
                     onClick={processTransaction}
                     sx={{ borderRadius: 2, textTransform: 'none', fontWeight: 'bold', fontSize: '1rem' }}
                 >

@@ -1,3 +1,5 @@
+import {formatDateTime} from "../util/date";
+
 export interface ApiResponse<T> {
     success: boolean;
     message: string;
@@ -30,7 +32,7 @@ export interface TreatmentPackage {
 }
 
 export interface Customer {
-    id: number;
+    id: number | null;
     name: string;
     phoneNumber: string;
     address: string;
@@ -127,8 +129,9 @@ export interface CartItem {
 
 export class TransactionItem {
     id: number;
+    employee: Employee;
     time: string;
-    customer: string;
+    customer: Customer;
     service: string;
     amount: number;
     status: string;
@@ -140,18 +143,32 @@ export class TransactionItem {
 
         if (!record) {
             this.id = Date.now();
-            this.time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            this.customer = "";
+            this.time = formatDateTime(new Date());
             this.service = "";
             this.amount = 0;
             this.status = "LUNAS";
             this.originalRecord = null;
+
+            this.customer = {} as Customer;
+
+            this.employee = {
+                id: 0,
+                name: "",
+                username: "",
+                role: "",
+                accessRole: "",
+                phoneNumber: "",
+                password: ""
+            } as Employee;
+
         } else if (record.customer && typeof record.customer === 'object') {
             // Backend
             const raw = record as CustomerTreatmentRecord;
+
             this.id = raw.id;
-            this.time = raw.date.split(" ")[1] || "00:00";
-            this.customer = raw.customer.name;
+            this.employee = raw.employee;
+            this.time = raw.date;
+            this.customer = raw.customer;
             this.status = "LUNAS";
             this.originalRecord = raw;
             this.amount = raw.actualPrice;
@@ -179,8 +196,9 @@ export class TransactionItem {
             }
 
         } else {
-            // Form Manual
+            // Manual form
             this.id = record.id;
+            this.employee = record.employee;
             this.time = record.time;
             this.customer = record.customer;
             this.service = record.service;
