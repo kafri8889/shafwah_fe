@@ -7,5 +7,5 @@ export function formatDateTime(date: Date): string {
     const mm = String(date.getMinutes()).padStart(2, "0");
     const ss = String(date.getSeconds()).padStart(2, "0");
 
-    return `${yyyy}-${MM}-${dd} ${HH}:${mm}:${ss}`;
+    return `${yyyy}-${MM}-${dd}T${HH}:${mm}:${ss}`;
 }
