@@ -39,6 +39,7 @@ export interface Customer {
     name: string;
     phoneNumber: string;
     address: string;
+    birthDate?: string | null;
     visitCount: number;
     totalVisitCount: number;
     lastVisitDate: string;
@@ -100,6 +101,7 @@ export interface CartItem {
     price: number;
     treatmentType: TreatmentType;
     details?: string;
+    priceLabel?: string;
 }
 
 export interface CustomerTransactionItem {
@@ -121,6 +123,18 @@ export interface CustomerTransaction {
     items: CustomerTransactionItem[];
 }
 
+export interface CustomerTreatmentRecord {
+    id: number;
+    customer: Customer;
+    employee: Employee;
+    treatment: Treatment | null;
+    treatmentPackage: TreatmentPackage | null;
+    actualPrice: number;
+    paymentMethod: PaymentMethod;
+    notes: string;
+    date: string;
+}
+
 export class TransactionItem {
     id: number;
     employee: Employee;
@@ -132,7 +146,7 @@ export class TransactionItem {
     originalRecord: CustomerTransaction | null;
     items: CartItem[];
 
-    constructor(record?: CustomerTransaction | any) {
+    constructor(record?: CustomerTransaction | TransactionItem) {
         this.items = [];
 
         if (!record) {
@@ -167,20 +181,19 @@ export class TransactionItem {
             this.customer = raw.customer;
             this.status = "LUNAS";
             this.originalRecord = raw;
-            this.amount = 0;
+            this.amount = raw.actualPrice;
 
             this.items = [];
             const serviceNames: string[] = [];
 
             raw.items.forEach((item: CustomerTransactionItem) => {
-                this.amount += item.price;
-
                 if (item.treatment && item.treatmentType === "Single") {
                     this.items.push({
                         id: item.treatment.id,
                         name: item.treatment.title,
                         price: item.price,
-                        treatmentType: "Single"
+                        treatmentType: "Single",
+                        priceLabel: item.treatment.priceType
                     });
 
                     serviceNames.push(item.treatment.title);
@@ -216,14 +229,16 @@ export class TransactionItem {
             return;
         }
 
-        this.id = record.id;
-        this.employee = record.employee;
-        this.time = record.time;
-        this.customer = record.customer;
-        this.service = record.service;
-        this.amount = record.amount;
-        this.status = record.status;
-        this.items = record.items || [];
+        const localRecord = record as TransactionItem;
+
+        this.id = localRecord.id;
+        this.employee = localRecord.employee;
+        this.time = localRecord.time;
+        this.customer = localRecord.customer;
+        this.service = localRecord.service;
+        this.amount = localRecord.amount;
+        this.status = localRecord.status;
+        this.items = localRecord.items || [];
         this.originalRecord = null;
     }
 }
@@ -241,6 +256,7 @@ export interface TransactionRequest {
         id?: number;
         name: string;
         phoneNumber?: string;
+        birthDate?: string | null;
     };
     items: TransactionItemRequest[];
     actualPrice: number;

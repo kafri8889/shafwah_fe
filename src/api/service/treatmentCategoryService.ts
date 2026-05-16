@@ -31,7 +31,7 @@ export const treatmentCategoryService = {
     },
 
     delete: async (id: number) => {
-        const res = await api.delete<ApiResponse<any>>(`${ROUTE}/${id}`);
+        const res = await api.delete<ApiResponse<unknown>>(`${ROUTE}/${id}`);
         return res.data;
     }
 };

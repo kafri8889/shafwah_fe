@@ -1,4 +1,4 @@
-import {useEffect, useState} from "react";
+import {useEffect, useMemo, useState} from "react";
 import {
     Avatar,
     Box,
@@ -14,13 +14,16 @@ import {
     Divider,
     Grid,
     IconButton,
+    MenuItem,
     Paper,
+    Stack,
     Table,
     TableBody,
     TableCell,
     TableContainer,
     TableHead,
     TableRow,
+    TextField,
     Tooltip,
     Typography
 } from "@mui/material";
@@ -31,12 +34,47 @@ import {
     MonetizationOn as MoneyIcon,
     People as PeopleIcon,
     ReceiptLong as ReceiptIcon,
-    TrendingUp as TrendingUpIcon
+    Spa as SpaIcon
 } from "@mui/icons-material";
 import CashierDrawer from "./CashierDrawer.tsx";
 import toast, {Toaster} from "react-hot-toast";
-import {type CartItem, TransactionItem, type TransactionRequest} from "../../api/types.ts";
+import {
+    type CartItem,
+    type Customer,
+    type Employee,
+    type PaymentMethod,
+    TransactionItem,
+    type TransactionRequest
+} from "../../api/types.ts";
 import {transactionService} from "../../api/service/transactionService.ts";
+import AppShell from "../../components/AppShell.tsx";
+
+function parseTransactionDate(value: string) {
+    const parsed = new Date(value.replace(" ", "T"));
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatDateInput(date: Date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+}
+
+type TransactionDraft = {
+    id: number;
+    time: string;
+    customer: Customer;
+    employee: Employee;
+    amount: number;
+    items: CartItem[];
+    paymentMethod?: PaymentMethod;
+    notes?: string;
+};
+
+function getErrorMessage(error: unknown, fallback: string) {
+    return error instanceof Error ? error.message : fallback;
+}
 
 export default function DashboardPage() {
     const [drawerOpen, setDrawerOpen] = useState(false);
@@ -45,10 +83,57 @@ export default function DashboardPage() {
     const [loading, setLoading] = useState(false);
     const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
     const [transactionToDelete, setTransactionToDelete] = useState<TransactionItem | null>(null);
+    const [rangePreset, setRangePreset] = useState("today");
+    const [startDate, setStartDate] = useState(formatDateInput(new Date()));
+    const [endDate, setEndDate] = useState(formatDateInput(new Date()));
 
-    const totalRevenue = transactions.reduce((total, trx) => total + trx.amount, 0);
-    const totalCustomers = transactions.length;
-    const totalMonthlyTransactions = transactions.length;
+    const visibleTransactions = useMemo(() => {
+        const today = new Date();
+        let rangeStart: Date | null = null;
+        let rangeEnd: Date | null = null;
+
+        if (rangePreset === "today") {
+            rangeStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+            rangeEnd = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
+        } else if (rangePreset === "7d") {
+            rangeStart = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 6);
+        } else if (rangePreset === "30d") {
+            rangeStart = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 29);
+        } else if (rangePreset === "month") {
+            rangeStart = new Date(today.getFullYear(), today.getMonth(), 1);
+            rangeEnd = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+        } else if (rangePreset === "custom" && startDate && endDate) {
+            rangeStart = new Date(startDate);
+            rangeEnd = new Date(endDate);
+            rangeEnd.setHours(23, 59, 59, 999);
+        }
+
+        return transactions.filter((trx) => {
+            const date = parseTransactionDate(trx.time);
+            if (!date) return false;
+            if (rangeStart && date < rangeStart) return false;
+            if (rangeEnd && date >= rangeEnd) return false;
+            return true;
+        }).sort((a, b) => {
+            const aDate = parseTransactionDate(a.time)?.getTime() || 0;
+            const bDate = parseTransactionDate(b.time)?.getTime() || 0;
+            return bDate - aDate;
+        });
+    }, [transactions, rangePreset, startDate, endDate]);
+
+    const totalRevenue = useMemo(() => visibleTransactions.reduce((total, trx) => total + trx.amount, 0), [visibleTransactions]);
+    const totalCustomers = useMemo(() => new Set(visibleTransactions.map(trx => trx.customer?.id || trx.customer?.name)).size, [visibleTransactions]);
+    const totalFilteredTransactions = visibleTransactions.length;
+    const topService = useMemo(() => {
+        const counts = new Map<string, number>();
+        visibleTransactions.forEach(trx => {
+            trx.items?.forEach(item => {
+                counts.set(item.name, (counts.get(item.name) || 0) + 1);
+            });
+        });
+        const sorted = Array.from(counts.entries()).sort((a, b) => b[1] - a[1]);
+        return sorted[0]?.[0] || "-";
+    }, [visibleTransactions]);
 
     const newTransaction = () => {
         setSelectedTransaction(null);
@@ -89,11 +174,11 @@ export default function DashboardPage() {
         toast.promise(promise, {
             loading: "Deleting transaction...",
             success: () => `Transacion with ID #${id} deleted!`,
-            error: (err: any) => err?.message || "Unable to delete transaction!"
+            error: (err: unknown) => getErrorMessage(err, "Unable to delete transaction!")
         }).then(() => {});
     };
 
-    const saveTransaction = (txDataRaw: any) => {
+    const saveTransaction = (txDataRaw: TransactionDraft) => {
         // Convert CartItem -> TransactionItemRequest
         const itemsPayload = txDataRaw.items.map((item: CartItem) => ({
             treatmentType: item.treatmentType,
@@ -105,14 +190,15 @@ export default function DashboardPage() {
         const payload: TransactionRequest = {
             employeeId: txDataRaw.employee.id,
             customer: {
-                id: txDataRaw.customer?.id,
+                id: txDataRaw.customer?.id ?? undefined,
                 name: txDataRaw.customer?.name || "",
                 phoneNumber: txDataRaw.customer?.phoneNumber || "",
+                birthDate: txDataRaw.customer?.birthDate || null,
             },
             items: itemsPayload,
             actualPrice: txDataRaw.amount,
-            paymentMethod: "CASH", // Todo: bikin pilihan di UI
-            notes: "",
+            paymentMethod: txDataRaw.paymentMethod || "CASH",
+            notes: txDataRaw.notes || "",
             date: txDataRaw.time,
         };
 
@@ -150,8 +236,8 @@ export default function DashboardPage() {
             success: isUpdate
                 ? () => `Transaction #${txDataRaw.id} updated!`
                 : () => "Transaction saved!",
-            error: (err: any) =>
-                err?.message || (isUpdate ? "Transaction update failed!" : "Unable to save new transaction!")
+            error: (err: unknown) =>
+                getErrorMessage(err, isUpdate ? "Transaction update failed!" : "Unable to save new transaction!")
         }).then(() => {});
     };
 
@@ -178,66 +264,115 @@ export default function DashboardPage() {
 
     const summaryData = [
         {
-            title: "Pendapatan Hari Ini",
+            title: "Pendapatan",
             value: `Rp ${totalRevenue.toLocaleString('id-ID')}`,
-            icon: <MoneyIcon sx={{ fontSize: 30, color: "white" }} />,
-            color: "#10B981",
-            subtext: "+15% dari kemarin"
+            icon: <MoneyIcon sx={{ fontSize: 26, color: "white" }} />,
+            color: "#B47B4C",
+            subtext: "Sesuai filter table"
         },
         {
-            title: "Pelanggan Hari Ini",
+            title: "Pelanggan",
             value: `${totalCustomers} Orang`,
-            icon: <PeopleIcon sx={{ fontSize: 30, color: "white" }} />,
-            color: "#3B82F6",
-            subtext: "Ramai lancar"
+            icon: <PeopleIcon sx={{ fontSize: 26, color: "white" }} />,
+            color: "#C4705D",
+            subtext: "Unik di data table"
         },
         {
-            title: "Total Transaksi Bulan Ini",
-            value: `${totalMonthlyTransactions}`,
-            icon: <ReceiptIcon sx={{ fontSize: 30, color: "white" }} />,
-            color: "#F59E0B",
-            subtext: "Target: 200"
+            title: "Total Transaksi",
+            value: `${totalFilteredTransactions}`,
+            icon: <ReceiptIcon sx={{ fontSize: 26, color: "white" }} />,
+            color: "#D1A45E",
+            subtext: "Setelah filter range"
+        },
+        {
+            title: "Layanan Terlaris",
+            value: topService,
+            icon: <SpaIcon sx={{ fontSize: 26, color: "white" }} />,
+            color: "#8F5E36",
+            subtext: "Dari data table"
         }
     ];
 
     return (
-        <Box sx={{ m: 4 }}>
-            <Toaster />
-            <Box sx={{ mb: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <Box>
-                    <Typography variant="h4" fontWeight="bold" gutterBottom>
-                        Dashboard
-                    </Typography>
-                    <Typography variant="body1" color="text.secondary">
-                        Selamat datang kembali, Etmin!
-                    </Typography>
-                </Box>
-
+        <AppShell
+            title="Dashboard"
+            subtitle="Pantau performa harian, transaksi terakhir, dan akses cepat ke kasir."
+            actions={
                 <Button
                     variant="contained"
                     startIcon={<AddIcon />}
                     onClick={newTransaction}
-                    sx={{ height: 'fit-content', py: 1.5, px: 3, borderRadius: 3 }}
                 >
-                    New Transaction
+                    Transaksi Baru
                 </Button>
-            </Box>
-
+            }
+        >
+            <Toaster />
+            <Paper variant="outlined" sx={{ p: 2, borderRadius: 1, mb: 3 }}>
+                <Stack direction={{ xs: "column", md: "row" }} spacing={1.5} alignItems={{ md: "center" }} justifyContent="space-between">
+                    <Box>
+                        <Typography variant="subtitle1" fontWeight={700}>
+                            Filter Data Transaksi
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary">
+                            Insight card dan table memakai range data yang sama.
+                        </Typography>
+                    </Box>
+                    <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} alignItems={{ sm: "center" }}>
+                        <TextField
+                            select
+                            size="small"
+                            label="Range"
+                            value={rangePreset}
+                            onChange={(e) => setRangePreset(e.target.value)}
+                            sx={{ minWidth: 160 }}
+                        >
+                            <MenuItem value="today">Hari ini</MenuItem>
+                            <MenuItem value="7d">7 hari terakhir</MenuItem>
+                            <MenuItem value="30d">30 hari terakhir</MenuItem>
+                            <MenuItem value="month">Bulan ini</MenuItem>
+                            <MenuItem value="all">Semua data</MenuItem>
+                            <MenuItem value="custom">Custom</MenuItem>
+                        </TextField>
+                        {rangePreset === "custom" && (
+                            <>
+                                <TextField
+                                    size="small"
+                                    type="date"
+                                    label="Dari"
+                                    InputLabelProps={{ shrink: true }}
+                                    value={startDate}
+                                    onChange={(e) => setStartDate(e.target.value)}
+                                />
+                                <TextField
+                                    size="small"
+                                    type="date"
+                                    label="Sampai"
+                                    InputLabelProps={{ shrink: true }}
+                                    value={endDate}
+                                    onChange={(e) => setEndDate(e.target.value)}
+                                />
+                            </>
+                        )}
+                    </Stack>
+                </Stack>
+            </Paper>
             <Grid container spacing={3} sx={{ mb: 4 }}>
                 {summaryData.map((card, index) => (
-                    <Grid item xs={12} md={4} key={index}>
-                        <Card sx={{ borderRadius: 2, boxShadow: '0px 4px 20px rgba(0,0,0,0.05)' }}>
+                    <Grid size={{ xs: 12, md: 3 }} key={index}>
+                        <Card sx={{ borderRadius: 1, height: "100%" }}>
                             <CardContent sx={{ display: 'flex', alignItems: 'center', p: 3 }}>
-                                <Avatar
-                                    variant="rounded"
-                                    sx={{
-                                        bgcolor: card.color,
-                                        width: 56,
-                                        height: 56,
-                                        mr: 2,
-                                        boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
-                                    }}
-                                >
+                                    <Avatar
+                                        variant="rounded"
+                                        sx={{
+                                            bgcolor: card.color,
+                                            width: 46,
+                                            height: 46,
+                                            mr: 2,
+                                            borderRadius: 1,
+                                            boxShadow: '0 6px 14px rgba(60, 47, 42, 0.18)'
+                                        }}
+                                    >
                                     {card.icon}
                                 </Avatar>
                                 <Box>
@@ -248,8 +383,7 @@ export default function DashboardPage() {
                                         {card.value}
                                     </Typography>
                                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                        <TrendingUpIcon sx={{ fontSize: 16, color: 'success.main' }} />
-                                        <Typography variant="caption" color="success.main" fontWeight="bold">
+                                        <Typography variant="caption" color="text.secondary" fontWeight="bold">
                                             {card.subtext}
                                         </Typography>
                                     </Box>
@@ -260,12 +394,18 @@ export default function DashboardPage() {
                 ))}
             </Grid>
 
-            <Paper sx={{ p: 3, borderRadius: 2, boxShadow: '0px 4px 20px rgba(0,0,0,0.05)' }}>
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-                    <Typography variant="h6" fontWeight="bold">
-                        Transaksi Terakhir
-                    </Typography>
-                </Box>
+            <Paper sx={{ p: 3, borderRadius: 1 }}>
+                <Stack direction={{ xs: "column", md: "row" }} alignItems={{ md: "center" }} justifyContent="space-between" spacing={1.5} sx={{ mb: 2 }}>
+                    <Box>
+                        <Typography variant="h6" fontWeight="bold">
+                            Transaksi Terakhir
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary">
+                            Ringkas transaksi terbaru yang masuk di kasir.
+                        </Typography>
+                    </Box>
+                    <Chip label={`${visibleTransactions.length} transaksi`} color="secondary" />
+                </Stack>
 
                 <Divider sx={{ mb: 2 }} />
 
@@ -286,17 +426,17 @@ export default function DashboardPage() {
                             {loading ? (
                                 <TableRow>
                                     <TableCell colSpan={7} align="center">
-                                        Loading transaction data...
+                                        Memuat transaksi...
                                     </TableCell>
                                 </TableRow>
-                            ) : transactions.length === 0 ? (
+                            ) : visibleTransactions.length === 0 ? (
                                 <TableRow>
                                     <TableCell colSpan={7} align="center">
                                         Belum ada transaksi :(
                                     </TableCell>
                                 </TableRow>
                             ) : (
-                                transactions.map((row) => (
+                                visibleTransactions.map((row) => (
                                     <TableRow
                                         key={row.id}
                                         hover
@@ -362,6 +502,6 @@ export default function DashboardPage() {
                 initialData={selectedTransaction}
                 onSubmit={saveTransaction}
             />
-        </Box>
+        </AppShell>
     );
 }

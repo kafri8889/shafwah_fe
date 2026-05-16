@@ -7,6 +7,7 @@ interface CustomerPayload {
     name: string;
     phoneNumber: string;
     address: string;
+    birthDate?: string | null;
     visitCount?: number;
     totalVisitCount?: number;
     lastVisitDate?: string;
@@ -34,7 +35,7 @@ export const customerService = {
     },
 
     delete: async (id: number) => {
-        const res = await api.delete<ApiResponse<any>>(`${ROUTE}/${id}`);
+        const res = await api.delete<ApiResponse<unknown>>(`${ROUTE}/${id}`);
         return res.data;
     },
 
