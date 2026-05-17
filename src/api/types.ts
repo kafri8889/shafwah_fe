@@ -15,6 +15,16 @@ export interface ApiResponse<T> {
     data: T | null;
 }
 
+export interface PagedResponse<T> {
+    content: T[];
+    page: number;
+    size: number;
+    totalElements: number;
+    totalPages: number;
+    first: boolean;
+    last: boolean;
+}
+
 export interface TreatmentCategory {
     id: number;
     title: string;
@@ -450,5 +460,98 @@ export interface CashReconciliationRequest {
     date: string;
     actualCash: number;
     cashierName: string;
+    notes: string;
+}
+
+export interface StaffPayroll {
+    id: number | null;
+    staff: Employee;
+    month: string;
+    dailySalary: number;
+    workDays: number;
+    dailySalaryTotal: number;
+    baseSalary: number;
+    commission: number;
+    quarterlyRewardAmount: number;
+    quarterlyRewardStartMonth: string;
+    quarterlyRewardEligible: boolean;
+    quarterlyReward: number;
+    handledRevenue: number;
+    handledTransactions: number;
+    targetRevenue: number;
+    targetReached: boolean;
+    targetBonusAmount: number;
+    targetBonusPaid: number;
+    fridayBonusEnabled: boolean;
+    fridayBonusAmount: number;
+    fridayCount: number;
+    fridayBonusTotal: number;
+    payDate: string;
+    paymentMethod: PaymentMethod;
+    expenseCategoryId: string;
+    expenseCategoryName: string;
+    expenseKind: ExpenseKind;
+    paid: boolean;
+    paidAt?: string | null;
+    financeExpenseId?: number | null;
+    extraBonusTotal: number;
+    bonuses: StaffPayrollBonus[];
+    grossPay: number;
+    deductionTotal: number;
+    deductions: StaffPayrollDeduction[];
+    totalPay: number;
+    notes: string;
+    generated: boolean;
+}
+
+export interface StaffPayrollBonus {
+    id?: number;
+    date: string;
+    title: string;
+    amount: number;
+    notes: string;
+}
+
+export interface StaffPayrollDeduction {
+    id?: number;
+    date: string;
+    title: string;
+    amount: number;
+    notes: string;
+}
+
+export interface StaffPayrollRequest {
+    dailySalary: number;
+    workDays: number;
+    baseSalary: number;
+    quarterlyReward: number;
+    quarterlyRewardStartMonth: string;
+    targetRevenue: number;
+    targetBonusAmount: number;
+    fridayBonusEnabled: boolean;
+    fridayBonusAmount: number;
+    payDate?: string | null;
+    paymentMethod: PaymentMethod;
+    expenseCategoryId?: string | null;
+    expenseCategoryName?: string | null;
+    expenseKind?: ExpenseKind | null;
+    bonuses: StaffPayrollBonusRequest[];
+    deductions: StaffPayrollDeductionRequest[];
+    notes: string;
+}
+
+export interface StaffPayrollBonusRequest {
+    clientKey?: string;
+    date?: string | null;
+    title: string;
+    amount: number;
+    notes: string;
+}
+
+export interface StaffPayrollDeductionRequest {
+    clientKey?: string;
+    date?: string | null;
+    title: string;
+    amount: number;
     notes: string;
 }

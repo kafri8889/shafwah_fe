@@ -10,7 +10,9 @@ import type {
     MonthlyBudget,
     MonthlyBudgetRequest,
     RecurringExpense,
-    RecurringExpenseRequest
+    RecurringExpenseRequest,
+    StaffPayroll,
+    StaffPayrollRequest
 } from "../types.ts";
 
 const ROUTE = "/api/finance";
@@ -111,6 +113,34 @@ export const financeService = {
 
     createCashReconciliation: async (data: CashReconciliationRequest) => {
         const res = await api.post<ApiResponse<CashReconciliation>>(`${ROUTE}/cash-reconciliations`, data);
+        return res.data;
+    },
+
+    getPayroll: async (month?: string) => {
+        const res = await api.get<ApiResponse<StaffPayroll[]>>(`${ROUTE}/payroll`, {
+            params: month ? { month } : undefined
+        });
+        return res.data;
+    },
+
+    getStaffPayroll: async (staffId: number, month?: string) => {
+        const res = await api.get<ApiResponse<StaffPayroll>>(`${ROUTE}/payroll/${staffId}`, {
+            params: month ? { month } : undefined
+        });
+        return res.data;
+    },
+
+    saveStaffPayroll: async (staffId: number, month: string, data: StaffPayrollRequest) => {
+        const res = await api.put<ApiResponse<StaffPayroll>>(`${ROUTE}/payroll/${staffId}`, data, {
+            params: { month }
+        });
+        return res.data;
+    },
+
+    payStaffPayroll: async (staffId: number, month: string) => {
+        const res = await api.patch<ApiResponse<StaffPayroll>>(`${ROUTE}/payroll/${staffId}/pay`, undefined, {
+            params: { month }
+        });
         return res.data;
     }
 };

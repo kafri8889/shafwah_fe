@@ -22,6 +22,7 @@ import {
     TableCell,
     TableContainer,
     TableHead,
+    TablePagination,
     TableRow,
     TextField,
     Tooltip,
@@ -48,6 +49,7 @@ import {
 } from "../../api/types.ts";
 import {transactionService} from "../../api/service/transactionService.ts";
 import AppShell from "../../components/AppShell.tsx";
+import {type RangePreset, resolveDateRange} from "../../util/dateRange.ts";
 
 function parseTransactionDate(value: string) {
     const parsed = new Date(value.replace(" ", "T"));
@@ -83,12 +85,21 @@ export default function DashboardPage() {
     const [drawerOpen, setDrawerOpen] = useState(false);
     const [selectedTransaction, setSelectedTransaction] = useState<TransactionItem | null>(null);
     const [transactions, setTransactions] = useState<TransactionItem[]>([]);
-    const [loading, setLoading] = useState(false);
+    const [pageTransactions, setPageTransactions] = useState<TransactionItem[]>([]);
+    const [totalElements, setTotalElements] = useState(0);
+    const [pageNumber, setPageNumber] = useState(0);
+    const [pageSize, setPageSize] = useState(20);
+    const [tableLoading, setTableLoading] = useState(false);
     const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
     const [transactionToDelete, setTransactionToDelete] = useState<TransactionItem | null>(null);
-    const [rangePreset, setRangePreset] = useState("today");
+    const [rangePreset, setRangePreset] = useState<RangePreset>("today");
     const [startDate, setStartDate] = useState(formatDateInput(new Date()));
     const [endDate, setEndDate] = useState(formatDateInput(new Date()));
+
+    const resolvedRange = useMemo(
+        () => resolveDateRange(rangePreset, startDate, endDate),
+        [rangePreset, startDate, endDate]
+    );
 
     const visibleTransactions = useMemo(() => {
         const today = new Date();
@@ -167,10 +178,9 @@ export default function DashboardPage() {
                 throw new Error(res.message || "Unable to delete transaction!");
             }
 
-            setTransactions(prev => prev.filter(t => t.id !== id));
             setDeleteDialogOpen(false);
             setTransactionToDelete(null);
-            return res;
+            return refreshAfterMutation().then(() => res);
         });
 
         toast.promise(promise, {
@@ -198,14 +208,8 @@ export default function DashboardPage() {
                     throw new Error(failed.message || "Unable to save legacy transactions!");
                 }
 
-                const savedTransactions = responses
-                    .map((res) => res.data)
-                    .filter((item): item is NonNullable<typeof item> => Boolean(item))
-                    .map((item) => new TransactionItem(item));
-
-                setTransactions(prev => [...savedTransactions, ...prev]);
                 setDrawerOpen(false);
-                return responses;
+                return refreshAfterMutation().then(() => responses);
             });
 
             toast.promise(promise, {
@@ -229,10 +233,8 @@ export default function DashboardPage() {
                     throw new Error(res.message || "Unable to save legacy transaction!");
                 }
 
-                const saved = res.data;
-                setTransactions(prev => [new TransactionItem(saved), ...prev]);
                 setDrawerOpen(false);
-                return res;
+                return refreshAfterMutation().then(() => res);
             });
 
             toast.promise(promise, {
@@ -279,22 +281,8 @@ export default function DashboardPage() {
                 throw new Error(res.message || "Unable to save transaction!");
             }
 
-            const newTransaction = new TransactionItem(res.data);
-
-            setTransactions(prev => {
-                const index = prev.findIndex(t => t.id === newTransaction.id);
-
-                if (index >= 0) {
-                    const copy = [...prev];
-                    copy[index] = newTransaction;
-                    return copy;
-                }
-
-                return [newTransaction, ...prev];
-            });
-
             setDrawerOpen(false);
-            return res;
+            return refreshAfterMutation().then(() => res);
         });
 
         toast.promise(promise, {
@@ -309,7 +297,6 @@ export default function DashboardPage() {
 
     useEffect(() => {
         const fetchData = async () => {
-            setLoading(true);
             try {
                 const resTransaction = await transactionService.getAll();
 
@@ -319,13 +306,77 @@ export default function DashboardPage() {
             } catch (error) {
                 console.error("Failed to fetch data: ", error);
                 setTransactions([]);
-            } finally {
-                setLoading(false);
             }
         };
 
         fetchData();
     }, []);
+
+    // Reset to first page when filter changes.
+    useEffect(() => {
+        setPageNumber(0);
+    }, [rangePreset, startDate, endDate]);
+
+    // Server-side paginated table fetch.
+    useEffect(() => {
+        let cancelled = false;
+
+        const fetchPaged = async () => {
+            setTableLoading(true);
+            try {
+                const res = await transactionService.getPaged({
+                    page: pageNumber,
+                    size: pageSize,
+                    sort: "date,desc",
+                    startDate: resolvedRange.startDate,
+                    endDate: resolvedRange.endDate
+                });
+                if (cancelled) return;
+                if (res?.success && res.data) {
+                    setPageTransactions(res.data.content.map((record) => new TransactionItem(record)));
+                    setTotalElements(res.data.totalElements);
+                } else {
+                    setPageTransactions([]);
+                    setTotalElements(0);
+                }
+            } catch (error) {
+                if (!cancelled) {
+                    console.error("Failed to fetch paged transactions: ", error);
+                    setPageTransactions([]);
+                    setTotalElements(0);
+                }
+            } finally {
+                if (!cancelled) setTableLoading(false);
+            }
+        };
+
+        fetchPaged();
+        return () => { cancelled = true; };
+    }, [pageNumber, pageSize, resolvedRange.startDate, resolvedRange.endDate]);
+
+    const refreshAfterMutation = async () => {
+        try {
+            const [allRes, pagedRes] = await Promise.all([
+                transactionService.getAll(),
+                transactionService.getPaged({
+                    page: pageNumber,
+                    size: pageSize,
+                    sort: "date,desc",
+                    startDate: resolvedRange.startDate,
+                    endDate: resolvedRange.endDate
+                })
+            ]);
+            if (allRes?.success && Array.isArray(allRes.data)) {
+                setTransactions(allRes.data.map((record) => new TransactionItem(record)));
+            }
+            if (pagedRes?.success && pagedRes.data) {
+                setPageTransactions(pagedRes.data.content.map((record) => new TransactionItem(record)));
+                setTotalElements(pagedRes.data.totalElements);
+            }
+        } catch (error) {
+            console.error("Failed to refresh transactions after mutation: ", error);
+        }
+    };
 
 
     const summaryData = [
@@ -390,7 +441,7 @@ export default function DashboardPage() {
                             size="small"
                             label="Range"
                             value={rangePreset}
-                            onChange={(e) => setRangePreset(e.target.value)}
+                            onChange={(e) => setRangePreset(e.target.value as RangePreset)}
                             sx={{ minWidth: 160 }}
                         >
                             <MenuItem value="today">Hari ini</MenuItem>
@@ -470,7 +521,7 @@ export default function DashboardPage() {
                             Ringkas transaksi terbaru yang masuk di kasir.
                         </Typography>
                     </Box>
-                    <Chip label={`${visibleTransactions.length} transaksi`} color="secondary" />
+                    <Chip label={`${totalElements} transaksi`} color="secondary" />
                 </Stack>
 
                 <Divider sx={{ mb: 2 }} />
@@ -489,20 +540,20 @@ export default function DashboardPage() {
                             </TableRow>
                         </TableHead>
                         <TableBody>
-                            {loading ? (
+                            {tableLoading ? (
                                 <TableRow>
                                     <TableCell colSpan={7} align="center">
                                         Memuat transaksi...
                                     </TableCell>
                                 </TableRow>
-                            ) : visibleTransactions.length === 0 ? (
+                            ) : pageTransactions.length === 0 ? (
                                 <TableRow>
                                     <TableCell colSpan={7} align="center">
                                         Belum ada transaksi :(
                                     </TableCell>
                                 </TableRow>
                             ) : (
-                                visibleTransactions.map((row) => (
+                                pageTransactions.map((row) => (
                                     <TableRow
                                         key={row.id}
                                         hover
@@ -540,6 +591,20 @@ export default function DashboardPage() {
                         </TableBody>
                     </Table>
                 </TableContainer>
+                <TablePagination
+                    component="div"
+                    count={totalElements}
+                    page={pageNumber}
+                    onPageChange={(_, newPage) => setPageNumber(newPage)}
+                    rowsPerPage={pageSize}
+                    onRowsPerPageChange={(event) => {
+                        setPageSize(parseInt(event.target.value, 10));
+                        setPageNumber(0);
+                    }}
+                    rowsPerPageOptions={[10, 20, 50, 100]}
+                    labelRowsPerPage="Baris per halaman"
+                    labelDisplayedRows={({ from, to, count }) => `${from}–${to} dari ${count}`}
+                />
             </Paper>
 
             <Dialog

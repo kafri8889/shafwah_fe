@@ -1,5 +1,5 @@
 import {api} from "../client.ts";
-import type {ApiResponse, Customer} from "../types.ts";
+import type {ApiResponse, Customer, PagedResponse} from "../types.ts";
 
 const ROUTE = "/api/customers";
 
@@ -13,9 +13,32 @@ interface CustomerPayload {
     lastVisitDate?: string;
 }
 
+export interface CustomerPagedParams {
+    page?: number;
+    size?: number;
+    sort?: string;
+    search?: string;
+    startDate?: string;
+    endDate?: string;
+}
+
 export const customerService = {
     getAll: async () => {
         const res = await api.get<ApiResponse<Customer[]>>(ROUTE);
+        return res.data;
+    },
+
+    getPaged: async (params: CustomerPagedParams = {}) => {
+        const res = await api.get<ApiResponse<PagedResponse<Customer>>>(`${ROUTE}/paged`, {
+            params: {
+                page: params.page ?? 0,
+                size: params.size ?? 20,
+                sort: params.sort ?? "lastVisitDate,desc",
+                search: params.search?.trim() || undefined,
+                startDate: params.startDate || undefined,
+                endDate: params.endDate || undefined
+            }
+        });
         return res.data;
     },
 
@@ -36,34 +59,6 @@ export const customerService = {
 
     delete: async (id: number) => {
         const res = await api.delete<ApiResponse<unknown>>(`${ROUTE}/${id}`);
-        return res.data;
-    },
-
-    searchByName: async (name: string) => {
-        const res = await api.get<ApiResponse<Customer[]>>(`${ROUTE}/search/by-name`, {
-            params: { name }
-        });
-        return res.data;
-    },
-
-    searchByVisitCount: async (min: number, max: number) => {
-        const res = await api.get<ApiResponse<Customer[]>>(`${ROUTE}/search/by-visit-count`, {
-            params: { min, max }
-        });
-        return res.data;
-    },
-
-    searchByTotalVisitCount: async (min: number, max: number) => {
-        const res = await api.get<ApiResponse<Customer[]>>(`${ROUTE}/search/by-total-visit-count`, {
-            params: { min, max }
-        });
-        return res.data;
-    },
-
-    searchByLastVisitDate: async (start: string, end: string) => {
-        const res = await api.get<ApiResponse<Customer[]>>(`${ROUTE}/search/by-last-visit-date`, {
-            params: { start, end }
-        });
         return res.data;
     }
 };

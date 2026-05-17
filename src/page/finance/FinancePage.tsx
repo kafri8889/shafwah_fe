@@ -56,7 +56,8 @@ import type {
     PaymentMethod,
     RecurringExpense,
     RecurringExpenseFrequency,
-    RecurringExpenseRequest
+    RecurringExpenseRequest,
+    StaffPayroll
 } from "../../api/types.ts";
 import {transactionService} from "../../api/service/transactionService.ts";
 import {financeService} from "../../api/service/financeService.ts";
@@ -93,6 +94,8 @@ type ExpenseCategorySummary = {
     name: string;
     kind: ExpenseKind;
     budget: number;
+    expenseActual: number;
+    recurringEstimate: number;
     actual: number;
     description: string;
 };
@@ -285,13 +288,46 @@ function applyCategoryToRecurring(categories: FinanceCategory[], categoryId: str
     };
 }
 
+function getMonthBounds(month: string) {
+    const [year, monthIndex] = month.split("-").map(Number);
+    const start = new Date(year, monthIndex - 1, 1);
+    const end = new Date(year, monthIndex, 0);
+    return { start, end, daysInMonth: end.getDate() };
+}
+
+function isRecurringActiveInMonth(item: RecurringExpense, month: string) {
+    if (!item.active) return false;
+    const { start, end } = getMonthBounds(month);
+    const itemStart = parseDate(item.startDate || item.nextDueDate);
+    const itemEnd = item.endDate ? parseDate(item.endDate) : null;
+
+    if (itemStart && itemStart > end) return false;
+    if (itemEnd && itemEnd < start) return false;
+    return true;
+}
+
+function getMonthlyRecurringEstimate(item: RecurringExpense, month: string) {
+    const { daysInMonth } = getMonthBounds(month);
+    const multiplier = item.frequency === "DAILY"
+        ? daysInMonth
+        : item.frequency === "WEEKLY"
+            ? 4
+            : item.frequency === "QUARTERLY"
+                ? 1 / 3
+                : item.frequency === "YEARLY"
+                    ? 1 / 12
+                    : 1;
+    return (item.amount || 0) * multiplier;
+}
+
 async function fetchFinanceData(month: string) {
-    const [categoryRes, expenseRes, budgetRes, recurringRes, reconciliationRes] = await Promise.all([
+    const [categoryRes, expenseRes, budgetRes, recurringRes, reconciliationRes, payrollRes] = await Promise.all([
         financeService.getCategories(),
         financeService.getExpenses(),
         financeService.getBudgets(month),
         financeService.getRecurringExpenses(),
-        financeService.getCashReconciliations()
+        financeService.getCashReconciliations(),
+        financeService.getPayroll(month)
     ]);
 
     return {
@@ -299,7 +335,8 @@ async function fetchFinanceData(month: string) {
         expenses: expenseRes.success && Array.isArray(expenseRes.data) ? expenseRes.data : [],
         budgets: budgetRes.success && Array.isArray(budgetRes.data) ? budgetRes.data : [],
         recurringExpenses: recurringRes.success && Array.isArray(recurringRes.data) ? recurringRes.data : [],
-        cashReconciliations: reconciliationRes.success && Array.isArray(reconciliationRes.data) ? reconciliationRes.data : []
+        cashReconciliations: reconciliationRes.success && Array.isArray(reconciliationRes.data) ? reconciliationRes.data : [],
+        payrollRows: payrollRes.success && Array.isArray(payrollRes.data) ? payrollRes.data : []
     };
 }
 
@@ -310,6 +347,7 @@ export default function FinancePage() {
     const [budgets, setBudgets] = useState<MonthlyBudget[]>([]);
     const [recurringExpenses, setRecurringExpenses] = useState<RecurringExpense[]>([]);
     const [cashReconciliations, setCashReconciliations] = useState<CashReconciliation[]>([]);
+    const [payrollRows, setPayrollRows] = useState<StaffPayroll[]>([]);
     const [loading, setLoading] = useState(true);
     const [rangePreset, setRangePreset] = useState("month");
     const [startDate, setStartDate] = useState(todayInput());
@@ -332,6 +370,7 @@ export default function FinancePage() {
         setBudgets(data.budgets);
         setRecurringExpenses(data.recurringExpenses);
         setCashReconciliations(data.cashReconciliations);
+        setPayrollRows(data.payrollRows);
     };
 
     useEffect(() => {
@@ -346,6 +385,7 @@ export default function FinancePage() {
                 setBudgets(financeData.budgets);
                 setRecurringExpenses(financeData.recurringExpenses);
                 setCashReconciliations(financeData.cashReconciliations);
+                setPayrollRows(financeData.payrollRows);
             })
             .catch((error) => {
                 console.error(error);
@@ -355,8 +395,14 @@ export default function FinancePage() {
     }, []);
 
     useEffect(() => {
-        financeService.getBudgets(budgetMonth)
-            .then((res) => setBudgets(res.success && Array.isArray(res.data) ? res.data : []))
+        Promise.all([
+            financeService.getBudgets(budgetMonth),
+            financeService.getPayroll(budgetMonth)
+        ])
+            .then(([budgetRes, payrollRes]) => {
+                setBudgets(budgetRes.success && Array.isArray(budgetRes.data) ? budgetRes.data : []);
+                setPayrollRows(payrollRes.success && Array.isArray(payrollRes.data) ? payrollRes.data : []);
+            })
             .catch(() => toast.error("Gagal memuat budget bulanan."));
     }, [budgetMonth]);
 
@@ -427,9 +473,13 @@ export default function FinancePage() {
     const expenseSummaryRows = useMemo<ExpenseCategorySummary[]>(() => {
         return financeCategories.map((category) => {
             const budget = budgets.find((item) => item.categoryId === category.categoryId)?.amount || 0;
-            const actual = filteredExpenses
+            const expenseActual = filteredExpenses
                 .filter((expense) => expense.categoryId === category.categoryId)
                 .reduce((sum, expense) => sum + (expense.amount || 0), 0);
+            const recurringEstimate = recurringExpenses
+                .filter((expense) => expense.categoryId === category.categoryId && isRecurringActiveInMonth(expense, budgetMonth))
+                .reduce((sum, expense) => sum + getMonthlyRecurringEstimate(expense, budgetMonth), 0);
+            const actual = expenseActual + recurringEstimate;
 
             return {
                 id: category.categoryId,
@@ -439,10 +489,12 @@ export default function FinancePage() {
                 kind: category.kind,
                 description: category.description,
                 budget,
+                expenseActual,
+                recurringEstimate,
                 actual
             };
         });
-    }, [budgets, financeCategories, filteredExpenses]);
+    }, [budgetMonth, budgets, financeCategories, filteredExpenses, recurringExpenses]);
 
     const expenseSummary = useMemo(() => buildExpenseSummary(expenseSummaryRows), [expenseSummaryRows]);
 
@@ -473,13 +525,22 @@ export default function FinancePage() {
         return Array.from(map.values()).sort((a, b) => b.commission - a.commission);
     }, [filteredTransactions]);
 
-    const cashAfterExpense = summary.net - expenseSummary.actual;
+    const paidPayrollRows = payrollRows.filter((row) => row.paid);
+    const payrollTotal = payrollRows.reduce((sum, row) => sum + (row.totalPay || 0), 0);
+    const paidPayrollTotal = paidPayrollRows.reduce((sum, row) => sum + (row.totalPay || 0), 0);
+    const paidPayrollCommission = paidPayrollRows.reduce((sum, row) => sum + (row.commission || 0), 0);
+    const paidPayrollNonCommission = Math.max(0, paidPayrollTotal - paidPayrollCommission);
+    const payrollTargetBonus = payrollRows.reduce((sum, row) => sum + (row.targetBonusPaid || 0), 0);
+    const payrollFridayBonus = payrollRows.reduce((sum, row) => sum + (row.fridayBonusTotal || 0), 0);
+    const nonSalaryExpenseActual = filteredExpenses
+        .filter((expense) => expense.categoryId !== "salary")
+        .reduce((sum, expense) => sum + (expense.amount || 0), 0);
+    const cashAfterExpense = summary.net - nonSalaryExpenseActual - paidPayrollNonCommission;
     const averageTransaction = summary.transactions > 0 ? summary.gross / summary.transactions : 0;
-    const activeRecurring = useMemo(() => recurringExpenses.filter((item) => item.active), [recurringExpenses]);
+    const activeRecurring = useMemo(() => recurringExpenses.filter((item) => isRecurringActiveInMonth(item, budgetMonth)), [budgetMonth, recurringExpenses]);
     const recurringMonthlyEstimate = useMemo(() => activeRecurring.reduce((sum, item) => {
-        const multiplier = item.frequency === "DAILY" ? 30 : item.frequency === "WEEKLY" ? 4 : item.frequency === "QUARTERLY" ? 1 / 3 : item.frequency === "YEARLY" ? 1 / 12 : 1;
-        return sum + (item.amount || 0) * multiplier;
-    }, 0), [activeRecurring]);
+        return sum + getMonthlyRecurringEstimate(item, budgetMonth);
+    }, 0), [activeRecurring, budgetMonth]);
     const reconciliationShortage = filteredReconciliations
         .filter((item) => item.status === "SHORT")
         .reduce((sum, item) => sum + Math.abs(item.difference || 0), 0);
@@ -492,6 +553,8 @@ export default function FinancePage() {
     const expenseChartData = useMemo(() => expenseSummaryRows.map((item) => ({
         name: item.name,
         budget: item.budget,
+        expense: item.expenseActual,
+        recurring: item.recurringEstimate,
         actual: item.actual
     })), [expenseSummaryRows]);
     const recurringChartData = useMemo(() => {
@@ -686,32 +749,53 @@ export default function FinancePage() {
                             <MenuItem value="TRANSFER">TRANSFER</MenuItem>
                             <MenuItem value="QRIS">QRIS</MenuItem>
                         </TextField>
+                        <TextField
+                            size="small"
+                            type="month"
+                            label="Bulan payroll"
+                            InputLabelProps={{ shrink: true }}
+                            value={budgetMonth}
+                            onChange={(event) => setBudgetMonth(event.target.value || currentMonth())}
+                            sx={{ minWidth: 160 }}
+                        />
                     </Stack>
                 </Stack>
             </Paper>
 
             <Grid container spacing={3} sx={{ mb: 3 }}>
-                <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
+                <Grid size={{ xs: 12, sm: 6, lg: 2 }}>
                     <Paper sx={{ p: 2, borderRadius: 1 }}>
                         <Typography variant="caption" color="text.secondary">Omzet Masuk</Typography>
                         <Typography variant="h5" fontWeight={900}>{formatCurrency(summary.gross)}</Typography>
                     </Paper>
                 </Grid>
-                <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
+                <Grid size={{ xs: 12, sm: 6, lg: 2 }}>
                     <Paper sx={{ p: 2, borderRadius: 1 }}>
                         <Typography variant="caption" color="text.secondary">Rata-rata Transaksi</Typography>
                         <Typography variant="h5" fontWeight={900}>{formatCurrency(averageTransaction)}</Typography>
                     </Paper>
                 </Grid>
-                <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
+                <Grid size={{ xs: 12, sm: 6, lg: 2 }}>
                     <Paper sx={{ p: 2, borderRadius: 1 }}>
                         <Typography variant="caption" color="text.secondary">Net Setelah Komisi</Typography>
                         <Typography variant="h5" fontWeight={900}>{formatCurrency(summary.net)}</Typography>
                     </Paper>
                 </Grid>
-                <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
+                <Grid size={{ xs: 12, sm: 6, lg: 2 }}>
                     <Paper sx={{ p: 2, borderRadius: 1 }}>
-                        <Typography variant="caption" color="text.secondary">Cash Setelah Expense</Typography>
+                        <Typography variant="caption" color="text.secondary">Payroll Dibayar Non-Komisi</Typography>
+                        <Typography variant="h5" fontWeight={900}>{formatCurrency(paidPayrollNonCommission)}</Typography>
+                    </Paper>
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6, lg: 2 }}>
+                    <Paper sx={{ p: 2, borderRadius: 1 }}>
+                        <Typography variant="caption" color="text.secondary">Total Payroll</Typography>
+                        <Typography variant="h5" fontWeight={900}>{formatCurrency(payrollTotal)}</Typography>
+                    </Paper>
+                </Grid>
+                <Grid size={{ xs: 12, sm: 6, lg: 2 }}>
+                    <Paper sx={{ p: 2, borderRadius: 1 }}>
+                        <Typography variant="caption" color="text.secondary">Cash Setelah Payroll</Typography>
                         <Typography variant="h5" fontWeight={900}>{formatCurrency(cashAfterExpense)}</Typography>
                     </Paper>
                 </Grid>
@@ -862,10 +946,12 @@ export default function FinancePage() {
                 {tab === 1 && (
                     <Stack spacing={2}>
                         <Grid container spacing={2}>
-                            <Grid size={{ xs: 12, md: 3 }}><Paper sx={{ p: 2, borderRadius: 1 }}><Typography variant="caption" color="text.secondary">Staff Aktif di Filter</Typography><Typography variant="h6" fontWeight={900}>{staffData.length.toLocaleString("id-ID")}</Typography></Paper></Grid>
-                            <Grid size={{ xs: 12, md: 3 }}><Paper sx={{ p: 2, borderRadius: 1 }}><Typography variant="caption" color="text.secondary">Total Komisi</Typography><Typography variant="h6" fontWeight={900}>{formatCurrency(summary.commission)}</Typography></Paper></Grid>
-                            <Grid size={{ xs: 12, md: 3 }}><Paper sx={{ p: 2, borderRadius: 1 }}><Typography variant="caption" color="text.secondary">Basis Omzet Staff</Typography><Typography variant="h6" fontWeight={900}>{formatCurrency(staffData.reduce((sum, staff) => sum + staff.gross, 0))}</Typography></Paper></Grid>
-                            <Grid size={{ xs: 12, md: 3 }}><Paper sx={{ p: 2, borderRadius: 1 }}><Typography variant="caption" color="text.secondary">Komisi Tertinggi</Typography><Typography variant="h6" fontWeight={900}>{formatCurrency(staffData[0]?.commission || 0)}</Typography></Paper></Grid>
+                            <Grid size={{ xs: 12, md: 2 }}><Paper sx={{ p: 2, borderRadius: 1 }}><Typography variant="caption" color="text.secondary">Staff Aktif</Typography><Typography variant="h6" fontWeight={900}>{staffData.length.toLocaleString("id-ID")}</Typography></Paper></Grid>
+                            <Grid size={{ xs: 12, md: 2 }}><Paper sx={{ p: 2, borderRadius: 1 }}><Typography variant="caption" color="text.secondary">Total Komisi</Typography><Typography variant="h6" fontWeight={900}>{formatCurrency(summary.commission)}</Typography></Paper></Grid>
+                            <Grid size={{ xs: 12, md: 2 }}><Paper sx={{ p: 2, borderRadius: 1 }}><Typography variant="caption" color="text.secondary">Basis Omzet</Typography><Typography variant="h6" fontWeight={900}>{formatCurrency(staffData.reduce((sum, staff) => sum + staff.gross, 0))}</Typography></Paper></Grid>
+                            <Grid size={{ xs: 12, md: 2 }}><Paper sx={{ p: 2, borderRadius: 1 }}><Typography variant="caption" color="text.secondary">Payroll Bulan</Typography><Typography variant="h6" fontWeight={900}>{formatCurrency(payrollTotal)}</Typography></Paper></Grid>
+                            <Grid size={{ xs: 12, md: 2 }}><Paper sx={{ p: 2, borderRadius: 1 }}><Typography variant="caption" color="text.secondary">Bonus Target</Typography><Typography variant="h6" fontWeight={900}>{formatCurrency(payrollTargetBonus)}</Typography></Paper></Grid>
+                            <Grid size={{ xs: 12, md: 2 }}><Paper sx={{ p: 2, borderRadius: 1 }}><Typography variant="caption" color="text.secondary">Bonus Jumat</Typography><Typography variant="h6" fontWeight={900}>{formatCurrency(payrollFridayBonus)}</Typography></Paper></Grid>
                         </Grid>
                         <Paper variant="outlined" sx={{ p: 2, borderRadius: 1 }}>
                             <Typography variant="subtitle1" fontWeight={900} sx={{ mb: 2 }}>Grafik Komisi Staff</Typography>
@@ -923,9 +1009,9 @@ export default function FinancePage() {
                     <Stack spacing={2}>
                         <Grid container spacing={2}>
                             <Grid size={{ xs: 12, md: 3 }}><Paper sx={{ p: 2, borderRadius: 1 }}><Typography variant="caption" color="text.secondary">Budget Bulanan</Typography><Typography variant="h6" fontWeight={900}>{formatCurrency(expenseSummary.budget)}</Typography></Paper></Grid>
-                            <Grid size={{ xs: 12, md: 3 }}><Paper sx={{ p: 2, borderRadius: 1 }}><Typography variant="caption" color="text.secondary">Realisasi Expense</Typography><Typography variant="h6" fontWeight={900}>{formatCurrency(expenseSummary.actual)}</Typography></Paper></Grid>
+                            <Grid size={{ xs: 12, md: 3 }}><Paper sx={{ p: 2, borderRadius: 1 }}><Typography variant="caption" color="text.secondary">Expense + Recurring</Typography><Typography variant="h6" fontWeight={900}>{formatCurrency(expenseSummary.actual)}</Typography></Paper></Grid>
                             <Grid size={{ xs: 12, md: 3 }}><Paper sx={{ p: 2, borderRadius: 1 }}><Typography variant="caption" color="text.secondary">Sisa Budget</Typography><Typography variant="h6" fontWeight={900}>{formatCurrency(expenseSummary.remainingBudget)}</Typography></Paper></Grid>
-                            <Grid size={{ xs: 12, md: 3 }}><Paper sx={{ p: 2, borderRadius: 1 }}><Typography variant="caption" color="text.secondary">Kategori</Typography><Typography variant="h6" fontWeight={900}>{expenseSummary.categoryCount.toLocaleString("id-ID")}</Typography></Paper></Grid>
+                            <Grid size={{ xs: 12, md: 3 }}><Paper sx={{ p: 2, borderRadius: 1 }}><Typography variant="caption" color="text.secondary">Recurring Bulan Ini</Typography><Typography variant="h6" fontWeight={900}>{formatCurrency(recurringMonthlyEstimate)}</Typography></Paper></Grid>
                         </Grid>
 
                         <Paper variant="outlined" sx={{ p: 2, borderRadius: 1 }}>
@@ -942,7 +1028,8 @@ export default function FinancePage() {
                                             <RechartsTooltip contentStyle={chartTooltipStyle} formatter={(value, name) => [formatCurrency(Number(value)), String(name)]} />
                                             <Legend />
                                             <Bar dataKey="budget" name="Budget" fill="#D1A45E" radius={[6, 6, 0, 0]} maxBarSize={38} />
-                                            <Bar dataKey="actual" name="Realisasi" fill="#C4705D" radius={[6, 6, 0, 0]} maxBarSize={38} />
+                                            <Bar dataKey="expense" name="Expense" fill="#C4705D" radius={[6, 6, 0, 0]} maxBarSize={38} />
+                                            <Bar dataKey="recurring" name="Recurring" fill="#6C8A6C" radius={[6, 6, 0, 0]} maxBarSize={38} />
                                         </BarChart>
                                     </ResponsiveContainer>
                                 )}
@@ -991,6 +1078,8 @@ export default function FinancePage() {
                                         <TableCell>Jenis</TableCell>
                                         <TableCell>Catatan</TableCell>
                                         <TableCell align="right">Budget</TableCell>
+                                        <TableCell align="right">Expense</TableCell>
+                                        <TableCell align="right">Recurring</TableCell>
                                         <TableCell align="right">Realisasi</TableCell>
                                         <TableCell align="right">Sisa</TableCell>
                                         <TableCell>Status</TableCell>
@@ -1004,6 +1093,8 @@ export default function FinancePage() {
                                             <TableCell>{category.kind}</TableCell>
                                             <TableCell sx={{ maxWidth: 360 }}>{category.description}</TableCell>
                                             <TableCell align="right">{formatCurrency(category.budget)}</TableCell>
+                                            <TableCell align="right">{formatCurrency(category.expenseActual)}</TableCell>
+                                            <TableCell align="right">{formatCurrency(category.recurringEstimate)}</TableCell>
                                             <TableCell align="right">{formatCurrency(category.actual)}</TableCell>
                                             <TableCell align="right">{formatCurrency(category.budget - category.actual)}</TableCell>
                                             <TableCell><Chip size="small" label={getExpenseStatus(category)} color={getExpenseStatus(category) === "Aman" ? "success" : "default"} /></TableCell>
@@ -1037,6 +1128,51 @@ export default function FinancePage() {
                                             <TableCell>{expense.paymentMethod}</TableCell>
                                             <TableCell>{expense.notes || "-"}</TableCell>
                                             <TableCell align="right">{formatCurrency(expense.amount)}</TableCell>
+                                        </TableRow>
+                                    ))}
+                                </TableBody>
+                            </Table>
+                        </TableContainer>
+
+                        <Typography variant="subtitle1" fontWeight={900}>Payroll {budgetMonth}</Typography>
+                        <TableContainer>
+                            <Table>
+                                <TableHead>
+                                    <TableRow>
+                                        <TableCell>Staff</TableCell>
+                                        <TableCell align="right">Gaji Pokok</TableCell>
+                                        <TableCell align="right">Gaji Harian</TableCell>
+                                        <TableCell align="right">Komisi</TableCell>
+                                        <TableCell align="right">Reward</TableCell>
+                                        <TableCell align="right">Bonus Target</TableCell>
+                                        <TableCell align="right">Bonus Jumat</TableCell>
+                                        <TableCell align="right">Bonus Lain</TableCell>
+                                        <TableCell align="right">Potongan</TableCell>
+                                        <TableCell align="right">Gaji Akhir</TableCell>
+                                    </TableRow>
+                                </TableHead>
+                                <TableBody>
+                                    {payrollRows.length === 0 ? (
+                                        <TableRow>
+                                            <TableCell colSpan={10} align="center">Belum ada payroll untuk bulan ini.</TableCell>
+                                        </TableRow>
+                                    ) : payrollRows.map((row) => (
+                                        <TableRow key={row.staff.id} hover>
+                                            <TableCell>
+                                                <Typography variant="body2" fontWeight={800}>{row.staff.name}</Typography>
+                                                <Typography variant="caption" color="text.secondary">
+                                                    {row.generated ? "Generated dari setting" : "Tersimpan"} | {row.expenseCategoryName || "Gaji staff"}
+                                                </Typography>
+                                            </TableCell>
+                                            <TableCell align="right">{formatCurrency(row.baseSalary)}</TableCell>
+                                            <TableCell align="right">{formatCurrency(row.dailySalaryTotal)}</TableCell>
+                                            <TableCell align="right">{formatCurrency(row.commission)}</TableCell>
+                                            <TableCell align="right">{formatCurrency(row.quarterlyReward)}</TableCell>
+                                            <TableCell align="right">{formatCurrency(row.targetBonusPaid)}</TableCell>
+                                            <TableCell align="right">{formatCurrency(row.fridayBonusTotal)}</TableCell>
+                                            <TableCell align="right">{formatCurrency(row.extraBonusTotal || 0)}</TableCell>
+                                            <TableCell align="right">{formatCurrency(row.deductionTotal || 0)}</TableCell>
+                                            <TableCell align="right">{formatCurrency(row.totalPay)}</TableCell>
                                         </TableRow>
                                     ))}
                                 </TableBody>

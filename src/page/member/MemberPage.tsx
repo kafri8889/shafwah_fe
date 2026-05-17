@@ -24,6 +24,7 @@ import {
     TableCell,
     TableContainer,
     TableHead,
+    TablePagination,
     TableRow,
     TextField,
     Tooltip,
@@ -52,6 +53,7 @@ import type {Customer, CustomerTransaction, CustomerTransactionItem, MemberVouch
 import {customerService} from "../../api/service/customerService.ts";
 import {transactionService} from "../../api/service/transactionService.ts";
 import {voucherService} from "../../api/service/voucherService.ts";
+import {type RangePreset, resolveDateRange} from "../../util/dateRange.ts";
 
 type MemberFormState = {
     name: string;
@@ -260,10 +262,14 @@ export default function MemberPage() {
     const navigate = useNavigate();
     const [members, setMembers] = useState<Customer[]>([]);
     const [transactions, setTransactions] = useState<CustomerTransaction[]>([]);
-    const [loading, setLoading] = useState(false);
+    const [pageMembers, setPageMembers] = useState<Customer[]>([]);
+    const [totalElements, setTotalElements] = useState(0);
+    const [pageNumber, setPageNumber] = useState(0);
+    const [pageSize, setPageSize] = useState(20);
+    const [tableLoading, setTableLoading] = useState(false);
     const [searchTerm, setSearchTerm] = useState("");
     const [birthDateSearch, setBirthDateSearch] = useState("");
-    const [datePreset, setDatePreset] = useState("all");
+    const [datePreset, setDatePreset] = useState<RangePreset>("all");
     const [startDate, setStartDate] = useState(formatDateInput(new Date()));
     const [endDate, setEndDate] = useState(formatDateInput(new Date()));
     const [editingMember, setEditingMember] = useState<Customer | null>(null);
@@ -275,7 +281,6 @@ export default function MemberPage() {
     const [form, setForm] = useState<MemberFormState>(emptyForm);
 
     const fetchMembers = async () => {
-        setLoading(true);
         try {
             const [res, transactionRes] = await Promise.all([
                 customerService.getAll(),
@@ -298,14 +303,64 @@ export default function MemberPage() {
             toast.error("Gagal memuat data member.");
             setMembers([]);
             setTransactions([]);
-        } finally {
-            setLoading(false);
         }
     };
 
     useEffect(() => {
         fetchMembers();
     }, []);
+
+    const resolvedRange = useMemo(
+        () => resolveDateRange(datePreset, startDate, endDate),
+        [datePreset, startDate, endDate]
+    );
+
+    // Reset to first page when filter changes.
+    useEffect(() => {
+        setPageNumber(0);
+    }, [searchTerm, birthDateSearch, datePreset, startDate, endDate]);
+
+    // Server-side paginated table fetch. Search keyword + birth date are merged
+    // into the backend `search` param; birth date wins when both are present
+    // because it is the more specific identifier.
+    useEffect(() => {
+        let cancelled = false;
+        const handle = setTimeout(async () => {
+            setTableLoading(true);
+            try {
+                const search = birthDateSearch?.trim() || searchTerm.trim();
+                const res = await customerService.getPaged({
+                    page: pageNumber,
+                    size: pageSize,
+                    sort: "lastVisitDate,desc",
+                    search: search || undefined,
+                    startDate: resolvedRange.startDate,
+                    endDate: resolvedRange.endDate
+                });
+                if (cancelled) return;
+                if (res?.success && res.data) {
+                    setPageMembers(res.data.content);
+                    setTotalElements(res.data.totalElements);
+                } else {
+                    setPageMembers([]);
+                    setTotalElements(0);
+                }
+            } catch (error) {
+                if (!cancelled) {
+                    console.error("Failed to fetch paged members: ", error);
+                    setPageMembers([]);
+                    setTotalElements(0);
+                }
+            } finally {
+                if (!cancelled) setTableLoading(false);
+            }
+        }, 200); // debounce typing
+
+        return () => {
+            cancelled = true;
+            clearTimeout(handle);
+        };
+    }, [pageNumber, pageSize, searchTerm, birthDateSearch, resolvedRange.startDate, resolvedRange.endDate]);
 
     const filteredMembers = useMemo(() => {
         const keyword = searchTerm.trim().toLowerCase();
@@ -405,6 +460,32 @@ export default function MemberPage() {
         setForm(emptyForm);
     };
 
+    const refreshAfterMutation = async () => {
+        try {
+            const search = birthDateSearch?.trim() || searchTerm.trim();
+            const [allRes, pagedRes] = await Promise.all([
+                customerService.getAll(),
+                customerService.getPaged({
+                    page: pageNumber,
+                    size: pageSize,
+                    sort: "lastVisitDate,desc",
+                    search: search || undefined,
+                    startDate: resolvedRange.startDate,
+                    endDate: resolvedRange.endDate
+                })
+            ]);
+            if (allRes.success && Array.isArray(allRes.data)) {
+                setMembers(allRes.data);
+            }
+            if (pagedRes?.success && pagedRes.data) {
+                setPageMembers(pagedRes.data.content);
+                setTotalElements(pagedRes.data.totalElements);
+            }
+        } catch (error) {
+            console.error("Failed to refresh members after mutation: ", error);
+        }
+    };
+
     const handleCreate = () => {
         const payload = {
             name: form.name.trim(),
@@ -425,9 +506,8 @@ export default function MemberPage() {
                 throw new Error(res.message || "Gagal menambahkan member.");
             }
 
-            setMembers((prev) => [res.data!, ...prev]);
             closeMemberDialog();
-            return res;
+            return refreshAfterMutation().then(() => res);
         });
 
         toast.promise(promise, {
@@ -460,9 +540,8 @@ export default function MemberPage() {
                 throw new Error(res.message || "Gagal memperbarui member.");
             }
 
-            setMembers((prev) => prev.map((item) => item.id === res.data?.id ? res.data : item));
             closeMemberDialog();
-            return res;
+            return refreshAfterMutation().then(() => res);
         });
 
         toast.promise(promise, {
@@ -481,9 +560,8 @@ export default function MemberPage() {
                 throw new Error(res.message || "Gagal menghapus member.");
             }
 
-            setMembers((prev) => prev.filter((item) => item.id !== id));
             setMemberToDelete(null);
-            return res;
+            return refreshAfterMutation().then(() => res);
         });
 
         toast.promise(promise, {
@@ -557,7 +635,7 @@ export default function MemberPage() {
                 <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
                     <Chip
                         icon={<PersonSearchIcon />}
-                        label={`${filteredMembers.length} data tampil`}
+                        label={`${totalElements} data tampil`}
                         color="secondary"
                     />
                     <Button
@@ -612,7 +690,7 @@ export default function MemberPage() {
                             size="small"
                             label="Visit terakhir"
                             value={datePreset}
-                            onChange={(event) => setDatePreset(event.target.value)}
+                            onChange={(event) => setDatePreset(event.target.value as RangePreset)}
                             sx={{ minWidth: 170 }}
                         >
                             <MenuItem value="all">Semua tanggal</MenuItem>
@@ -788,7 +866,7 @@ export default function MemberPage() {
                             Edit profil member, cek jumlah datang, dan lihat perawatan favoritnya.
                         </Typography>
                     </Box>
-                    <Chip label={`${filteredMembers.length} member`} color="secondary" />
+                    <Chip label={`${totalElements} member`} color="secondary" />
                 </Stack>
                 <Divider sx={{ mb: 2 }} />
                 <TableContainer>
@@ -807,19 +885,19 @@ export default function MemberPage() {
                             </TableRow>
                         </TableHead>
                         <TableBody>
-                            {loading ? (
+                            {tableLoading ? (
                                 <TableRow>
                                     <TableCell colSpan={9} align="center">
                                         Memuat member...
                                     </TableCell>
                                 </TableRow>
-                            ) : filteredMembers.length === 0 ? (
+                            ) : pageMembers.length === 0 ? (
                                 <TableRow>
                                     <TableCell colSpan={9} align="center">
                                         Tidak ada member yang cocok.
                                     </TableCell>
                                 </TableRow>
-                            ) : filteredMembers.map((member) => (
+                            ) : pageMembers.map((member) => (
                                 <TableRow key={member.id ?? member.name} hover>
                                     <TableCell>
                                         <Stack direction="row" spacing={1.25} alignItems="center">
@@ -891,6 +969,20 @@ export default function MemberPage() {
                         </TableBody>
                     </Table>
                 </TableContainer>
+                <TablePagination
+                    component="div"
+                    count={totalElements}
+                    page={pageNumber}
+                    onPageChange={(_, newPage) => setPageNumber(newPage)}
+                    rowsPerPage={pageSize}
+                    onRowsPerPageChange={(event) => {
+                        setPageSize(parseInt(event.target.value, 10));
+                        setPageNumber(0);
+                    }}
+                    rowsPerPageOptions={[10, 20, 50, 100]}
+                    labelRowsPerPage="Baris per halaman"
+                    labelDisplayedRows={({ from, to, count }) => `${from}–${to} dari ${count}`}
+                />
             </Paper>
 
             <Dialog open={Boolean(editingMember) || createDialogOpen} onClose={closeMemberDialog} maxWidth="sm" fullWidth>
