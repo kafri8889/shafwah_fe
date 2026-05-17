@@ -207,9 +207,8 @@ function filterByDate<T extends { date: string }>(items: T[], rangePreset: strin
         rangeStart = new Date(now.getFullYear(), now.getMonth(), 1);
         rangeEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
     } else if (rangePreset === "custom" && startDate && endDate) {
-        rangeStart = new Date(startDate);
-        rangeEnd = new Date(endDate);
-        rangeEnd.setHours(23, 59, 59, 999);
+        rangeStart = new Date(startDate + "T00:00:00");
+        rangeEnd = new Date(endDate + "T23:59:59.999");
     }
 
     if (!rangeStart && !rangeEnd) return items;

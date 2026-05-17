@@ -323,9 +323,8 @@ export default function MemberPage() {
             rangeStart = new Date(now.getFullYear(), 0, 1);
             rangeEnd = new Date(now.getFullYear() + 1, 0, 1);
         } else if (datePreset === "custom" && startDate && endDate) {
-            rangeStart = new Date(startDate);
-            rangeEnd = new Date(endDate);
-            rangeEnd.setHours(23, 59, 59, 999);
+            rangeStart = new Date(startDate + "T00:00:00");
+            rangeEnd = new Date(endDate + "T23:59:59.999");
         }
 
         return sorted.filter((member) =>

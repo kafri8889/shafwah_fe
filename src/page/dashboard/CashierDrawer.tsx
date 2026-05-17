@@ -69,11 +69,11 @@ const LEGACY_CUSTOMER_NAME = "Pelanggan Umum / Non Member";
 type LegacyBookRow = {
     id: number;
     employeeId: number | "";
-    commissionPercent: 5 | 10 | 15;
+    commissionPercent: 5 | 10 | 15 | 100;
     amount: string;
 };
 
-const createLegacyBookRow = (employeeId: number | "" = "", commissionPercent: 5 | 10 | 15 = 10): LegacyBookRow => ({
+const createLegacyBookRow = (employeeId: number | "" = "", commissionPercent: 5 | 10 | 15 | 100 = 10): LegacyBookRow => ({
     id: Date.now() + Math.floor(Math.random() * 1000),
     employeeId,
     commissionPercent,
@@ -171,7 +171,7 @@ export default function CashierDrawer({ open, onClose, initialData, onSubmit }: 
     const [notes, setNotes] = useState("");
     const [transactionDate, setTransactionDate] = useState(formatDateTimeLocalInput(new Date()));
     const [legacyMode, setLegacyMode] = useState(false);
-    const [legacyCommissionPercent, setLegacyCommissionPercent] = useState<5 | 10 | 15>(10);
+    const [legacyCommissionPercent, setLegacyCommissionPercent] = useState<5 | 10 | 15 | 100>(10);
     const [legacyRows, setLegacyRows] = useState<LegacyBookRow[]>([createLegacyBookRow()]);
     const [customerSearch, setCustomerSearch] = useState("");
     const [selectedTreatmentPrices, setSelectedTreatmentPrices] = useState<Record<number, string>>({});
@@ -1284,7 +1284,7 @@ export default function CashierDrawer({ open, onClose, initialData, onSubmit }: 
                                                                     size="small"
                                                                     value={row.commissionPercent}
                                                                     onChange={(event) => {
-                                                                        const commissionPercent = Number(event.target.value) as 5 | 10 | 15;
+                                                                        const commissionPercent = Number(event.target.value) as 5 | 10 | 15 | 100;
                                                                         setLegacyCommissionPercent(commissionPercent);
                                                                         updateLegacyRow(row.id, { commissionPercent });
                                                                     }}
@@ -1292,6 +1292,7 @@ export default function CashierDrawer({ open, onClose, initialData, onSubmit }: 
                                                                     <MenuItem value={5}>5%</MenuItem>
                                                                     <MenuItem value={10}>10%</MenuItem>
                                                                     <MenuItem value={15}>15%</MenuItem>
+                                                                    <MenuItem value={100}>100%</MenuItem>
                                                                 </TextField>
                                                                 <TextField
                                                                     label="Nominal"

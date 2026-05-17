@@ -53,9 +53,8 @@ export function filterTransactionsByDate(
     } else if (rangePreset === "30d") {
         rangeStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29);
     } else if (rangePreset === "custom" && startDate && endDate) {
-        rangeStart = new Date(startDate);
-        rangeEnd = new Date(endDate);
-        rangeEnd.setHours(23, 59, 59, 999);
+        rangeStart = new Date(startDate + "T00:00:00");
+        rangeEnd = new Date(endDate + "T23:59:59.999");
     }
 
     if (!rangeStart && !rangeEnd) return transactions;
