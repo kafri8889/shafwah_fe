@@ -2,6 +2,12 @@ import {formatDateTime} from "../util/date";
 
 export type TreatmentType = 'Single' | 'Package';
 export type PaymentMethod = 'CASH' | 'TRANSFER' | 'QRIS';
+export type VoucherDiscountType = "PERCENTAGE" | "FIXED";
+export type StaffCommissionType = "PERCENTAGE" | "FIXED";
+export type MemberVoucherStatus = "ACTIVE" | "USED" | "EXPIRED" | "CANCELLED";
+export type ExpenseKind = "FIXED" | "VARIABLE" | "ONE_TIME";
+export type RecurringExpenseFrequency = "DAILY" | "WEEKLY" | "MONTHLY" | "QUARTERLY" | "YEARLY";
+export type CashReconciliationStatus = "BALANCED" | "OVER" | "SHORT";
 
 export interface ApiResponse<T> {
     success: boolean;
@@ -23,6 +29,8 @@ export interface Treatment {
     active: boolean;
     priceType: string;
     prices: number[];
+    staffCommissionType?: StaffCommissionType;
+    staffCommissionValue?: number;
 }
 
 export interface TreatmentPackage {
@@ -48,11 +56,12 @@ export interface Customer {
 export interface Employee {
     id: number;
     name: string;
-    username: string;
+    username?: string;
     password?: string;
     role: string;
-    accessRole: string;
+    accessRole?: string;
     phoneNumber: string;
+    active?: boolean;
 }
 
 export interface EmployeeResponse {
@@ -85,6 +94,8 @@ export interface TreatmentRequest {
     active: boolean;
     priceType: string;
     prices: number[];
+    staffCommissionType: StaffCommissionType;
+    staffCommissionValue: number;
 }
 
 export interface TreatmentPackageRequest {
@@ -100,6 +111,7 @@ export interface CartItem {
     name: string;
     price: number;
     treatmentType: TreatmentType;
+    employee?: Employee | null;
     details?: string;
     priceLabel?: string;
 }
@@ -108,6 +120,7 @@ export interface CustomerTransactionItem {
     id: number;
     treatment: Treatment | null;
     treatmentPackage: TreatmentPackage | null;
+    employee?: Employee | null;
     treatmentType: TreatmentType;
     price: number;
 }
@@ -117,10 +130,58 @@ export interface CustomerTransaction {
     customer: Customer;
     employee: Employee;
     actualPrice: number;
+    voucherDiscountAmount: number;
     paymentMethod: PaymentMethod;
     notes: string;
     date: string;
     items: CustomerTransactionItem[];
+}
+
+export interface VoucherTemplate {
+    id: number;
+    name: string;
+    description: string;
+    discountType: VoucherDiscountType;
+    discountValue: number;
+    minimumTransaction: number;
+    validityDays: number;
+    neverExpires: boolean;
+    appliesToAll: boolean;
+    treatmentIds: number[];
+    treatmentPackageIds: number[];
+    active: boolean;
+    createdAt: string;
+}
+
+export interface MemberVoucher {
+    id: number;
+    template: VoucherTemplate;
+    customerId: number;
+    customerName: string;
+    code: string;
+    assignedAt: string;
+    expiresAt: string;
+    neverExpires: boolean;
+    status: MemberVoucherStatus;
+    usedTransactionId?: number | null;
+}
+
+export interface VoucherTemplateRequest {
+    name: string;
+    description: string;
+    discountType: VoucherDiscountType;
+    discountValue: number;
+    minimumTransaction: number;
+    validityDays: number;
+    appliesToAll: boolean;
+    treatmentIds: number[];
+    treatmentPackageIds: number[];
+    active: boolean;
+}
+
+export interface AssignVoucherRequest {
+    templateId: number;
+    customerId: number;
 }
 
 export interface CustomerTreatmentRecord {
@@ -133,6 +194,7 @@ export interface CustomerTreatmentRecord {
     paymentMethod: PaymentMethod;
     notes: string;
     date: string;
+    memberVoucherId?: number | null;
 }
 
 export class TransactionItem {
@@ -162,10 +224,9 @@ export class TransactionItem {
             this.employee = {
                 id: 0,
                 name: "",
-                username: "",
                 role: "",
-                accessRole: "",
                 phoneNumber: "",
+                active: true,
                 password: ""
             } as Employee;
 
@@ -193,6 +254,7 @@ export class TransactionItem {
                         name: item.treatment.title,
                         price: item.price,
                         treatmentType: "Single",
+                        employee: item.employee || raw.employee,
                         priceLabel: item.treatment.priceType
                     });
 
@@ -207,6 +269,7 @@ export class TransactionItem {
                         name: item.treatmentPackage.title,
                         price: item.price,
                         treatmentType: "Package",
+                        employee: item.employee || raw.employee,
                         details: detailNames
                     });
 
@@ -217,7 +280,8 @@ export class TransactionItem {
                         id: item.id,
                         name: "Layanan tidak diketahui",
                         price: item.price,
-                        treatmentType: "Single"
+                        treatmentType: "Single",
+                        employee: item.employee || raw.employee
                     });
 
                     serviceNames.push("Unknown treatment/package");
@@ -248,6 +312,7 @@ export interface TransactionItemRequest {
     treatmentId: number | null;
     treatmentPackageId: number | null;
     price: number;
+    employeeId?: number | null;
 }
 
 export interface TransactionRequest {
@@ -263,4 +328,127 @@ export interface TransactionRequest {
     paymentMethod: PaymentMethod;
     notes: string;
     date: string;
+    memberVoucherId?: number | null;
+}
+
+export interface LegacyTransactionRequest {
+    employeeId: number;
+    commissionPercent: number;
+    actualPrice: number;
+    paymentMethod: PaymentMethod;
+    notes: string;
+    date: string;
+}
+
+export interface FinanceCategory {
+    id: number;
+    categoryId: string;
+    name: string;
+    kind: ExpenseKind;
+    description: string;
+    active: boolean;
+    createdAt: string;
+}
+
+export interface FinanceCategoryRequest {
+    categoryId: string;
+    name: string;
+    kind: ExpenseKind;
+    description: string;
+    active: boolean;
+}
+
+export interface FinanceExpense {
+    id: number;
+    date: string;
+    categoryId: string;
+    categoryName: string;
+    kind: ExpenseKind;
+    amount: number;
+    paymentMethod: PaymentMethod;
+    vendor: string;
+    notes: string;
+    receiptUrl: string;
+    createdAt: string;
+}
+
+export interface FinanceExpenseRequest {
+    date: string;
+    categoryId: string;
+    categoryName: string;
+    kind: ExpenseKind;
+    amount: number;
+    paymentMethod: PaymentMethod;
+    vendor: string;
+    notes: string;
+    receiptUrl: string;
+}
+
+export interface MonthlyBudget {
+    id: number;
+    month: string;
+    categoryId: string;
+    categoryName: string;
+    kind: ExpenseKind;
+    amount: number;
+    createdAt: string;
+}
+
+export interface MonthlyBudgetRequest {
+    month: string;
+    categoryId: string;
+    categoryName: string;
+    kind: ExpenseKind;
+    amount: number;
+}
+
+export interface RecurringExpense {
+    id: number;
+    name: string;
+    categoryId: string;
+    categoryName: string;
+    kind: ExpenseKind;
+    amount: number;
+    paymentMethod: PaymentMethod;
+    frequency: RecurringExpenseFrequency;
+    startDate?: string | null;
+    endDate?: string | null;
+    nextDueDate: string;
+    active: boolean;
+    notes: string;
+    createdAt: string;
+}
+
+export interface RecurringExpenseRequest {
+    name: string;
+    categoryId: string;
+    categoryName: string;
+    kind: ExpenseKind;
+    amount: number;
+    paymentMethod: PaymentMethod;
+    frequency: RecurringExpenseFrequency;
+    startDate: string;
+    endDate?: string | null;
+    nextDueDate?: string;
+    active: boolean;
+    notes: string;
+}
+
+export interface CashReconciliation {
+    id: number;
+    date: string;
+    expectedCash: number;
+    actualCash: number;
+    difference: number;
+    status: CashReconciliationStatus;
+    cashierName: string;
+    notes: string;
+    createdAt: string;
+}
+
+export interface CashReconciliationRequest {
+    date: string;
+    actualCash: number;
+    cashierName: string;
+    notes: string;
 }

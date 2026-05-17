@@ -1,5 +1,5 @@
 import {Avatar, Box, Button, Paper, Stack, Typography} from "@mui/material";
-import {Link as RouterLink, useLocation} from "react-router-dom";
+import {Link as RouterLink, useLocation, useNavigate} from "react-router-dom";
 import type {ReactNode} from "react";
 import {isAdminUser} from "../util/auth.ts";
 
@@ -13,16 +13,28 @@ type AppShellProps = {
 const navItems = [
     { label: "Dashboard", to: "/dashboard" },
     { label: "Member", to: "/members" },
+    { label: "Employee", to: "/employees" },
+    { label: "Treatment", to: "/treatments" },
+    { label: "Voucher", to: "/vouchers" },
+    { label: "Finance", to: "/finance" },
     { label: "Insights", to: "/insights" }
 ];
 
 export default function AppShell({ title, subtitle, actions, children }: AppShellProps) {
     const location = useLocation();
-    const visibleNavItems = navItems.filter((item) => item.to !== "/insights" || isAdminUser());
+    const navigate = useNavigate();
+    const visibleNavItems = navItems.filter((item) =>
+        (item.to !== "/insights" && item.to !== "/vouchers" && item.to !== "/employees" && item.to !== "/treatments" && item.to !== "/finance") || isAdminUser()
+    );
+
+    const handleLogout = () => {
+        localStorage.removeItem("authToken");
+        navigate("/login", { replace: true });
+    };
 
     return (
         <Box className="page-shell" sx={{ px: { xs: 2, md: 4 }, py: 3 }}>
-            <Box sx={{ maxWidth: 1280, mx: "auto" }} className="fade-in">
+            <Box sx={{ width: "100%" }} className="fade-in">
                 <Paper
                     elevation={0}
                     sx={{
@@ -79,6 +91,20 @@ export default function AppShell({ title, subtitle, actions, children }: AppShel
                                     </Button>
                                 );
                             })}
+                            <Button
+                                variant="outlined"
+                                color="inherit"
+                                onClick={handleLogout}
+                                sx={{
+                                    borderRadius: 8,
+                                    px: 2.4,
+                                    color: "text.primary",
+                                    borderColor: "rgba(60, 47, 42, 0.22)",
+                                    fontWeight: 600
+                                }}
+                            >
+                                Logout
+                            </Button>
                         </Stack>
                     </Stack>
                 </Paper>

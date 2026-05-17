@@ -1,5 +1,5 @@
 import {api} from "../client";
-import type {ApiResponse, CustomerTransaction, TransactionRequest} from "../types";
+import type {ApiResponse, CustomerTransaction, LegacyTransactionRequest, TransactionRequest} from "../types";
 
 const ROUTE = "/api/transaction";
 
@@ -11,6 +11,11 @@ export const transactionService = {
 
     create: async (data: TransactionRequest) => {
         const res = await api.post<ApiResponse<CustomerTransaction>>(ROUTE, data);
+        return res.data;
+    },
+
+    createLegacy: async (data: LegacyTransactionRequest) => {
+        const res = await api.post<ApiResponse<CustomerTransaction>>(`${ROUTE}/legacy`, data);
         return res.data;
     },
 

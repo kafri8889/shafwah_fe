@@ -1,4 +1,5 @@
 import {useEffect, useMemo, useState} from "react";
+import {useNavigate} from "react-router-dom";
 import {
     Avatar,
     Box,
@@ -30,9 +31,11 @@ import {
 } from "@mui/material";
 import {
     Add as AddIcon,
+    CardGiftcard as VoucherIcon,
     Delete as DeleteIcon,
     Edit as EditIcon,
     EmojiEvents as TrophyIcon,
+    OpenInNew as DetailIcon,
     PeopleAlt as PeopleIcon,
     PersonSearch as PersonSearchIcon,
     Phone as PhoneIcon,
@@ -42,10 +45,13 @@ import {
     Today as TodayIcon
 } from "@mui/icons-material";
 import toast, {Toaster} from "react-hot-toast";
+import type {SxProps, Theme} from "@mui/material/styles";
+import {Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip as RechartsTooltip, XAxis, YAxis} from "recharts";
 import AppShell from "../../components/AppShell.tsx";
-import type {Customer, CustomerTransaction, CustomerTransactionItem} from "../../api/types.ts";
+import type {Customer, CustomerTransaction, CustomerTransactionItem, MemberVoucher} from "../../api/types.ts";
 import {customerService} from "../../api/service/customerService.ts";
 import {transactionService} from "../../api/service/transactionService.ts";
+import {voucherService} from "../../api/service/voucherService.ts";
 
 type MemberFormState = {
     name: string;
@@ -65,6 +71,20 @@ type MemberTrendPoint = {
 type TreatmentStat = {
     name: string;
     count: number;
+};
+
+type MarqueeTextProps = {
+    text: string;
+    variant?: "caption" | "body2" | "h5";
+    color?: string;
+    fontWeight?: number;
+    sx?: SxProps<Theme>;
+};
+
+const chartTooltipStyle = {
+    borderRadius: 8,
+    border: "1px solid rgba(143, 94, 54, 0.18)",
+    boxShadow: "0 12px 28px rgba(31, 24, 18, 0.12)"
 };
 
 const emptyForm: MemberFormState = {
@@ -95,6 +115,14 @@ function formatDateTime(value: string) {
         hour: "2-digit",
         minute: "2-digit"
     });
+}
+
+function formatVoucherExpiry(voucher: MemberVoucher) {
+    if (voucher.neverExpires || voucher.template.neverExpires || voucher.template.validityDays < 1) {
+        return "Tidak kadaluarsa";
+    }
+
+    return formatDateTime(voucher.expiresAt);
 }
 
 function toDateTimeInput(value: string) {
@@ -189,32 +217,47 @@ function buildTreatmentStats(transactions: CustomerTransaction[], customerId?: n
         .sort((a, b) => b.count - a.count);
 }
 
-function BarSpark({ data }: { data: MemberTrendPoint[] }) {
-    const maxValue = Math.max(...data.map((item) => item.value), 1);
-
+function MarqueeText({ text, variant = "body2", color, fontWeight, sx }: MarqueeTextProps) {
     return (
-        <Stack direction="row" alignItems="flex-end" spacing={1.25} sx={{ height: 130 }}>
-            {data.map((point) => (
-                <Box key={point.label} sx={{ flex: 1, textAlign: "center" }}>
-                    <Box
-                        sx={{
-                            height: `${Math.max(8, (point.value / maxValue) * 100)}%`,
-                            borderRadius: 1,
-                            bgcolor: "primary.main",
-                            opacity: point.value === 0 ? 0.28 : 0.9,
-                            transition: "height 180ms ease"
-                        }}
-                    />
-                    <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1 }}>
-                        {point.label}
-                    </Typography>
-                </Box>
-            ))}
-        </Stack>
+        <Box
+            title={text}
+            sx={[
+                {
+                    minWidth: 0,
+                    maxWidth: "100%",
+                    overflow: "hidden",
+                    "&:hover .marqueeText, &:focus-within .marqueeText": {
+                        animation: "memberMarquee 7s linear infinite"
+                    },
+                    "@keyframes memberMarquee": {
+                        "0%, 12%": { transform: "translateX(0)" },
+                        "88%, 100%": { transform: "translateX(-45%)" }
+                    }
+                },
+                ...(Array.isArray(sx) ? sx : [sx])
+            ]}
+        >
+            <Typography
+                className="marqueeText"
+                variant={variant}
+                color={color}
+                fontWeight={fontWeight}
+                tabIndex={0}
+                sx={{
+                    display: "inline-block",
+                    minWidth: "100%",
+                    whiteSpace: "nowrap",
+                    transition: "transform 180ms ease"
+                }}
+            >
+                {text}
+            </Typography>
+        </Box>
     );
 }
 
 export default function MemberPage() {
+    const navigate = useNavigate();
     const [members, setMembers] = useState<Customer[]>([]);
     const [transactions, setTransactions] = useState<CustomerTransaction[]>([]);
     const [loading, setLoading] = useState(false);
@@ -226,6 +269,9 @@ export default function MemberPage() {
     const [editingMember, setEditingMember] = useState<Customer | null>(null);
     const [createDialogOpen, setCreateDialogOpen] = useState(false);
     const [memberToDelete, setMemberToDelete] = useState<Customer | null>(null);
+    const [voucherDialogMember, setVoucherDialogMember] = useState<Customer | null>(null);
+    const [memberVouchers, setMemberVouchers] = useState<MemberVoucher[]>([]);
+    const [voucherLoading, setVoucherLoading] = useState(false);
     const [form, setForm] = useState<MemberFormState>(emptyForm);
 
     const fetchMembers = async () => {
@@ -321,6 +367,12 @@ export default function MemberPage() {
             .sort((a, b) => (b.totalVisitCount || 0) - (a.totalVisitCount || 0))
             .slice(0, 5);
     }, [filteredMembers]);
+    const topMemberChartData = useMemo(() => {
+        return topMembers.map((member) => ({
+            name: member.name,
+            visits: member.totalVisitCount || 0
+        }));
+    }, [topMembers]);
     const topTreatmentOverall = useMemo(() => {
         const memberIds = new Set(filteredMembers.map((member) => member.id).filter(Boolean));
         const scopedTransactions = transactions.filter((trx) => trx.customer?.id && memberIds.has(trx.customer.id));
@@ -440,6 +492,24 @@ export default function MemberPage() {
             success: "Member berhasil dihapus.",
             error: (error: unknown) => getErrorMessage(error, "Gagal menghapus member. Cek apakah member masih punya transaksi.")
         }).then(() => {});
+    };
+
+    const openVoucherDialog = (member: Customer) => {
+        setVoucherDialogMember(member);
+        setMemberVouchers([]);
+
+        if (!member.id) return;
+
+        setVoucherLoading(true);
+        voucherService.getMemberVouchers(member.id)
+            .then((res) => {
+                setMemberVouchers(res.success && Array.isArray(res.data) ? res.data : []);
+            })
+            .catch((error) => {
+                console.error(error);
+                toast.error("Gagal memuat voucher member.");
+            })
+            .finally(() => setVoucherLoading(false));
     };
 
     const summaryData = [
@@ -588,9 +658,7 @@ export default function MemberPage() {
                                     <Typography variant="body2" color="text.secondary" fontWeight={600}>
                                         {card.title}
                                     </Typography>
-                                    <Typography variant="h5" fontWeight={800} noWrap>
-                                        {card.value}
-                                    </Typography>
+                                    <MarqueeText text={card.value} variant="h5" fontWeight={800} />
                                     <Typography variant="caption" color="text.secondary" fontWeight={600}>
                                         {card.subtext}
                                     </Typography>
@@ -601,9 +669,9 @@ export default function MemberPage() {
                 ))}
             </Grid>
 
-            <Grid container spacing={3} sx={{ mb: 3 }}>
+            <Grid container spacing={3} alignItems="flex-start" sx={{ mb: 3 }}>
                 <Grid size={{ xs: 12, md: 7 }}>
-                    <Paper sx={{ p: 3, borderRadius: 1, height: "100%" }}>
+                    <Paper sx={{ p: 2.5, borderRadius: 1 }}>
                         <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={2} sx={{ mb: 2 }}>
                             <Box>
                                 <Typography variant="h6">Trend Visit Terakhir</Typography>
@@ -613,11 +681,31 @@ export default function MemberPage() {
                             </Box>
                             <Chip label={`${recentMembers} aktif`} color="secondary" variant="outlined" />
                         </Stack>
-                        <BarSpark data={monthlyTrend} />
+                        <Box sx={{ width: "100%", height: 220 }}>
+                            <ResponsiveContainer>
+                                <BarChart data={monthlyTrend} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
+                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(143, 94, 54, 0.14)" />
+                                    <XAxis dataKey="label" tickLine={false} axisLine={false} />
+                                    <YAxis allowDecimals={false} tickLine={false} axisLine={false} />
+                                    <RechartsTooltip
+                                        cursor={{ fill: "rgba(180, 123, 76, 0.08)" }}
+                                        contentStyle={chartTooltipStyle}
+                                        formatter={(value) => [`${Number(value).toLocaleString("id-ID")} member`, "Visit terakhir"]}
+                                    />
+                                    <Bar
+                                        dataKey="value"
+                                        name="Member"
+                                        fill="#B47B4C"
+                                        radius={[6, 6, 0, 0]}
+                                        maxBarSize={46}
+                                    />
+                                </BarChart>
+                            </ResponsiveContainer>
+                        </Box>
                     </Paper>
                 </Grid>
                 <Grid size={{ xs: 12, md: 5 }}>
-                    <Paper sx={{ p: 3, borderRadius: 1, height: "100%" }}>
+                    <Paper sx={{ p: 2.5, borderRadius: 1 }}>
                         <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 2 }}>
                             <TrophyIcon color="primary" />
                             <Box>
@@ -627,6 +715,39 @@ export default function MemberPage() {
                                 </Typography>
                             </Box>
                         </Stack>
+                        <Box sx={{ width: "100%", height: 190, mb: 2 }}>
+                            {topMemberChartData.length === 0 ? (
+                                <Stack alignItems="center" justifyContent="center" sx={{ height: "100%" }}>
+                                    <Typography variant="body2" color="text.secondary">
+                                        Belum ada data member.
+                                    </Typography>
+                                </Stack>
+                            ) : (
+                                <ResponsiveContainer>
+                                    <BarChart
+                                        data={topMemberChartData}
+                                        layout="vertical"
+                                        margin={{ top: 4, right: 12, left: 10, bottom: 4 }}
+                                    >
+                                        <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="rgba(143, 94, 54, 0.14)" />
+                                        <XAxis type="number" hide />
+                                        <YAxis
+                                            dataKey="name"
+                                            type="category"
+                                            width={132}
+                                            tickLine={false}
+                                            axisLine={false}
+                                        />
+                                        <RechartsTooltip
+                                            cursor={{ fill: "rgba(180, 123, 76, 0.08)" }}
+                                            contentStyle={chartTooltipStyle}
+                                            formatter={(value) => [`${Number(value).toLocaleString("id-ID")} kunjungan`, "Total visit"]}
+                                        />
+                                        <Bar dataKey="visits" name="Total visit" fill="#C4705D" radius={[0, 6, 6, 0]} maxBarSize={24} />
+                                    </BarChart>
+                                </ResponsiveContainer>
+                            )}
+                        </Box>
                         <Stack spacing={1.25}>
                             {topMembers.length === 0 ? (
                                 <Typography variant="body2" color="text.secondary">
@@ -647,9 +768,7 @@ export default function MemberPage() {
                                     }}
                                 >
                                     <Box sx={{ minWidth: 0 }}>
-                                        <Typography variant="body2" fontWeight={700} noWrap>
-                                            {index + 1}. {member.name}
-                                        </Typography>
+                                        <MarqueeText text={`${index + 1}. ${member.name}`} fontWeight={700} />
                                         <Typography variant="caption" color="text.secondary">
                                             Last visit: {formatDateTime(member.lastVisitDate)}
                                         </Typography>
@@ -709,9 +828,7 @@ export default function MemberPage() {
                                                 {member.name.slice(0, 1).toUpperCase()}
                                             </Avatar>
                                             <Box>
-                                                <Typography variant="body2" fontWeight={700}>
-                                                    {member.name}
-                                                </Typography>
+                                                <MarqueeText text={member.name} fontWeight={700} sx={{ maxWidth: 180 }} />
                                                 <Typography variant="caption" color="text.secondary">
                                                     ID #{member.id ?? "-"}
                                                 </Typography>
@@ -725,8 +842,8 @@ export default function MemberPage() {
                                             <Typography variant="body2">{member.phoneNumber || "-"}</Typography>
                                         </Stack>
                                     </TableCell>
-                                    <TableCell sx={{ maxWidth: 220, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                                        {member.address || "-"}
+                                    <TableCell sx={{ minWidth: 220, maxWidth: 360 }}>
+                                        <MarqueeText text={member.address || "-"} />
                                     </TableCell>
                                     <TableCell align="right">{member.visitCount}</TableCell>
                                     <TableCell align="right">
@@ -737,9 +854,7 @@ export default function MemberPage() {
                                             const favorite = member.id ? treatmentStatsByMember.get(member.id)?.[0] : null;
                                             return favorite ? (
                                                 <Stack spacing={0.25}>
-                                                    <Typography variant="body2" fontWeight={700} noWrap>
-                                                        {favorite.name}
-                                                    </Typography>
+                                                    <MarqueeText text={favorite.name} fontWeight={700} />
                                                     <Typography variant="caption" color="text.secondary">
                                                         {favorite.count} kali diambil
                                                     </Typography>
@@ -754,6 +869,16 @@ export default function MemberPage() {
                                         <Tooltip title="Edit member">
                                             <IconButton size="small" onClick={() => openEditDialog(member)}>
                                                 <EditIcon fontSize="small" />
+                                            </IconButton>
+                                        </Tooltip>
+                                        <Tooltip title="Detail member">
+                                            <IconButton size="small" onClick={() => member.id && navigate(`/members/${member.id}`)}>
+                                                <DetailIcon fontSize="small" />
+                                            </IconButton>
+                                        </Tooltip>
+                                        <Tooltip title="Lihat voucher">
+                                            <IconButton size="small" onClick={() => openVoucherDialog(member)}>
+                                                <VoucherIcon fontSize="small" />
                                             </IconButton>
                                         </Tooltip>
                                         <Tooltip title="Hapus member">
@@ -845,6 +970,34 @@ export default function MemberPage() {
                 <DialogActions>
                     <Button onClick={() => setMemberToDelete(null)}>Batal</Button>
                     <Button variant="contained" color="error" onClick={handleDelete}>Hapus</Button>
+                </DialogActions>
+            </Dialog>
+
+            <Dialog open={Boolean(voucherDialogMember)} onClose={() => setVoucherDialogMember(null)} maxWidth="sm" fullWidth>
+                <DialogTitle>Voucher {voucherDialogMember?.name || ""}</DialogTitle>
+                <DialogContent>
+                    <Stack spacing={1.25} sx={{ pt: 1 }}>
+                        {voucherLoading ? (
+                            <Typography variant="body2" color="text.secondary">Memuat voucher...</Typography>
+                        ) : memberVouchers.length === 0 ? (
+                            <Typography variant="body2" color="text.secondary">Member ini belum punya voucher.</Typography>
+                        ) : memberVouchers.map((voucher) => (
+                            <Paper key={voucher.id} variant="outlined" sx={{ p: 1.5, borderRadius: 1 }}>
+                                <Stack direction="row" justifyContent="space-between" spacing={2}>
+                                    <Box sx={{ minWidth: 0 }}>
+                                        <Typography variant="body2" fontWeight={700}>{voucher.template.name}</Typography>
+                                        <Typography variant="caption" color="text.secondary" display="block">
+                                            {voucher.code} | Exp: {formatVoucherExpiry(voucher)}
+                                        </Typography>
+                                    </Box>
+                                    <Chip label={voucher.status} size="small" color={voucher.status === "ACTIVE" ? "success" : "default"} />
+                                </Stack>
+                            </Paper>
+                        ))}
+                    </Stack>
+                </DialogContent>
+                <DialogActions>
+                    <Button onClick={() => setVoucherDialogMember(null)}>Tutup</Button>
                 </DialogActions>
             </Dialog>
         </AppShell>

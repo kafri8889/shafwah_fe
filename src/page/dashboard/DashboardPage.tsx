@@ -70,6 +70,9 @@ type TransactionDraft = {
     items: CartItem[];
     paymentMethod?: PaymentMethod;
     notes?: string;
+    isLegacy?: boolean;
+    legacyCommissionPercent?: number;
+    memberVoucherId?: number | null;
 };
 
 function getErrorMessage(error: unknown, fallback: string) {
@@ -178,13 +181,76 @@ export default function DashboardPage() {
         }).then(() => {});
     };
 
-    const saveTransaction = (txDataRaw: TransactionDraft) => {
+    const saveTransaction = (txDataRaw: TransactionDraft | TransactionDraft[]) => {
+        if (Array.isArray(txDataRaw)) {
+            const legacyRows = txDataRaw.filter((item) => item.isLegacy);
+            if (legacyRows.length === 0) return;
+
+            const promise = Promise.all(legacyRows.map((row) => transactionService.createLegacy({
+                employeeId: row.employee.id,
+                commissionPercent: row.legacyCommissionPercent || 10,
+                actualPrice: row.amount,
+                paymentMethod: row.paymentMethod || "CASH",
+                notes: row.notes || "",
+                date: row.time
+            }))).then((responses) => {
+                const failed = responses.find((res) => !res.success || !res.data);
+                if (failed) {
+                    throw new Error(failed.message || "Unable to save legacy transactions!");
+                }
+
+                const savedTransactions = responses
+                    .map((res) => res.data)
+                    .filter((item): item is NonNullable<typeof item> => Boolean(item))
+                    .map((item) => new TransactionItem(item));
+
+                setTransactions(prev => [...savedTransactions, ...prev]);
+                setDrawerOpen(false);
+                return responses;
+            });
+
+            toast.promise(promise, {
+                loading: `Saving ${legacyRows.length} legacy transactions...`,
+                success: () => `${legacyRows.length} transaksi buku tersimpan!`,
+                error: (err: unknown) => getErrorMessage(err, "Unable to save legacy transactions!")
+            }).then(() => {});
+            return;
+        }
+
+        if (txDataRaw.isLegacy) {
+            const promise = transactionService.createLegacy({
+                employeeId: txDataRaw.employee.id,
+                commissionPercent: txDataRaw.legacyCommissionPercent || 10,
+                actualPrice: txDataRaw.amount,
+                paymentMethod: txDataRaw.paymentMethod || "CASH",
+                notes: txDataRaw.notes || "",
+                date: txDataRaw.time
+            }).then(res => {
+                if (!res.success || !res.data) {
+                    throw new Error(res.message || "Unable to save legacy transaction!");
+                }
+
+                const saved = res.data;
+                setTransactions(prev => [new TransactionItem(saved), ...prev]);
+                setDrawerOpen(false);
+                return res;
+            });
+
+            toast.promise(promise, {
+                loading: "Saving legacy transaction...",
+                success: () => "Transaksi buku tersimpan!",
+                error: (err: unknown) => getErrorMessage(err, "Unable to save legacy transaction!")
+            }).then(() => {});
+            return;
+        }
+
         // Convert CartItem -> TransactionItemRequest
         const itemsPayload = txDataRaw.items.map((item: CartItem) => ({
             treatmentType: item.treatmentType,
             treatmentId: item.treatmentType === "Single" ? item.id : null,
             treatmentPackageId: item.treatmentType === "Package" ? item.id : null,
-            price: item.price
+            price: item.price,
+            employeeId: item.employee?.id ?? txDataRaw.employee.id
         }));
 
         const payload: TransactionRequest = {
@@ -200,6 +266,7 @@ export default function DashboardPage() {
             paymentMethod: txDataRaw.paymentMethod || "CASH",
             notes: txDataRaw.notes || "",
             date: txDataRaw.time,
+            memberVoucherId: txDataRaw.memberVoucherId ?? null,
         };
 
         const isUpdate = transactions.some(t => t.id === txDataRaw.id);
