@@ -80,6 +80,35 @@ const createLegacyBookRow = (employeeId: number | "" = "", commissionPercent: 5 
     amount: ""
 });
 
+// Parse a single token like "125k", "63000", "7K" into a number.
+// Returns null when token is empty or malformed.
+function parseLegacyAmountToken(token: string): number | null {
+    const trimmed = token.trim().toLowerCase();
+    if (!trimmed) return null;
+    const match = trimmed.match(/^(\d+(?:\.\d+)?)(k)?$/);
+    if (!match) return null;
+    const base = Number(match[1]);
+    if (!Number.isFinite(base) || base <= 0) return null;
+    return match[2] ? base * 1000 : base;
+}
+
+// Parse a comma-separated amount string into individual numeric values.
+function parseLegacyAmounts(raw: string): number[] {
+    if (!raw) return [];
+    return raw
+        .split(",")
+        .map((token) => parseLegacyAmountToken(token))
+        .filter((value): value is number => value !== null && value > 0);
+}
+
+// Returns true when every comma-separated token in the raw string is a valid amount.
+function isLegacyAmountInputValid(raw: string): boolean {
+    if (!raw.trim()) return false;
+    const tokens = raw.split(",").map((token) => token.trim());
+    if (tokens.some((token) => token === "")) return false;
+    return tokens.every((token) => parseLegacyAmountToken(token) !== null);
+}
+
 function formatDateTimeLocalInput(date: Date) {
     const year = date.getFullYear();
     const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -257,7 +286,6 @@ export default function CashierDrawer({ open, onClose, initialData, onSubmit }: 
                 setDiscountType("AMOUNT");
                 setDiscountValue("");
                 setNotes("");
-                setTransactionDate(formatDateTimeLocalInput(new Date()));
                 setLegacyMode(false);
                 setLegacyCommissionPercent(10);
                 setLegacyRows([createLegacyBookRow()]);
@@ -521,12 +549,22 @@ export default function CashierDrawer({ open, onClose, initialData, onSubmit }: 
     };
 
     const validLegacyRows = legacyRows
-        .map((row) => ({
-            ...row,
-            amountValue: Math.max(0, Number(row.amount) || 0),
-            employee: employees.find((employee) => employee.id === Number(row.employeeId)) || null
-        }))
-        .filter((row) => row.employee && row.amountValue > 0);
+        .flatMap((row) => {
+            const amounts = parseLegacyAmounts(row.amount);
+            const employee = employees.find((employee) => employee.id === Number(row.employeeId)) || null;
+            if (!employee || amounts.length === 0) return [];
+            return amounts.map((amountValue, idx) => ({
+                ...row,
+                id: row.id + idx,
+                amountValue,
+                employee
+            }));
+        });
+
+    const allLegacyRowsValid = legacyRows.every((row) => {
+        const employee = employees.find((employee) => employee.id === Number(row.employeeId));
+        return Boolean(employee) && isLegacyAmountInputValid(row.amount);
+    });
 
     const processTransaction = () => {
         if (!selectedEmployee && !legacyMode) {
@@ -539,8 +577,8 @@ export default function CashierDrawer({ open, onClose, initialData, onSubmit }: 
                 toast.error("Isi minimal satu baris transaksi buku dengan stylist dan nominal valid.");
                 return;
             }
-            if (validLegacyRows.length !== legacyRows.length) {
-                toast.error("Lengkapi semua baris transaksi buku atau hapus baris kosong.");
+            if (!allLegacyRowsValid) {
+                toast.error("Periksa nominal tiap baris. Pisahkan banyak nominal dengan koma.");
                 return;
             }
             setConfirmOpen(true);
@@ -1245,7 +1283,7 @@ export default function CashierDrawer({ open, onClose, initialData, onSubmit }: 
                                                             Bulk Transaksi Buku
                                                         </Typography>
                                                         <Typography variant="caption" color="text.secondary">
-                                                            Satu baris akan disimpan sebagai satu transaksi buku.
+                                                            Setiap baris bisa berisi banyak nominal dipisah koma. Tekan "k" untuk shortcut ×1000.
                                                         </Typography>
                                                     </Box>
                                                     <Button size="small" variant="outlined" startIcon={<AddIcon />} onClick={addLegacyRow}>
@@ -1298,10 +1336,29 @@ export default function CashierDrawer({ open, onClose, initialData, onSubmit }: 
                                                                     label="Nominal"
                                                                     fullWidth
                                                                     size="small"
-                                                                    type="number"
+                                                                    inputMode="text"
                                                                     value={row.amount}
-                                                                    onChange={(event) => updateLegacyRow(row.id, { amount: event.target.value })}
-                                                                    placeholder="Contoh: 80000"
+                                                                    onChange={(event) => {
+                                                                        // Allow digits, comma, and "k"/"K" only.
+                                                                        const val = event.target.value.replace(/[^0-9,kK]/g, "");
+                                                                        updateLegacyRow(row.id, { amount: val });
+                                                                    }}
+                                                                    onKeyDown={(event) => {
+                                                                        if (event.key === "k" || event.key === "K") {
+                                                                            const current = row.amount;
+                                                                            // Find the active token (after last comma).
+                                                                            const lastComma = current.lastIndexOf(",");
+                                                                            const head = lastComma >= 0 ? current.slice(0, lastComma + 1) : "";
+                                                                            const active = lastComma >= 0 ? current.slice(lastComma + 1) : current;
+                                                                            // Only auto-expand if active token is purely digits and non-empty.
+                                                                            if (/^\d+$/.test(active)) {
+                                                                                event.preventDefault();
+                                                                                updateLegacyRow(row.id, { amount: head + active + "000" });
+                                                                            }
+                                                                        }
+                                                                    }}
+                                                                    error={Boolean(row.amount) && !isLegacyAmountInputValid(row.amount)}
+                                                                    placeholder="125k,63000,10500,7k"
                                                                 />
                                                                 <IconButton
                                                                     size="small"
